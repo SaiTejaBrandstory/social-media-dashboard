@@ -1,11 +1,9 @@
-import NextAuth from "next-auth";
-import authConfig from "./auth.config";
+import { getToken } from "next-auth/jwt";
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
-const { auth } = NextAuth(authConfig);
-
-export default auth((req) => {
-  const isLoggedIn = !!req.auth;
+/** Edge-safe auth check — JWT cookie only (no Prisma / no NextAuth middleware wrapper). */
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (
@@ -18,19 +16,26 @@ export default auth((req) => {
     return NextResponse.next();
   }
 
+  const token = await getToken({
+    req,
+    secret: process.env.AUTH_SECRET,
+    secureCookie: process.env.NODE_ENV === "production",
+  });
+  const isLoggedIn = !!token;
+
   if (pathname === "/login") {
     if (isLoggedIn) {
-      return NextResponse.redirect(new URL("/", req.nextUrl));
+      return NextResponse.redirect(new URL("/", req.url));
     }
     return NextResponse.next();
   }
 
   if (!isLoggedIn) {
-    return NextResponse.redirect(new URL("/login", req.nextUrl));
+    return NextResponse.redirect(new URL("/login", req.url));
   }
 
   return NextResponse.next();
-});
+}
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image).*)"],
