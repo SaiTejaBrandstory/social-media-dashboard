@@ -1,9 +1,15 @@
-import { getToken } from "next-auth/jwt";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-/** Edge-safe auth check — JWT cookie only (no Prisma / no NextAuth middleware wrapper). */
-export async function middleware(req: NextRequest) {
+/** Auth.js session cookie names (Edge-safe — no next-auth / Prisma imports). */
+function hasSessionCookie(req: NextRequest): boolean {
+  return (
+    req.cookies.has("__Secure-authjs.session-token") ||
+    req.cookies.has("authjs.session-token")
+  );
+}
+
+export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (
@@ -16,12 +22,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const token = await getToken({
-    req,
-    secret: process.env.AUTH_SECRET,
-    secureCookie: process.env.NODE_ENV === "production",
-  });
-  const isLoggedIn = !!token;
+  const isLoggedIn = hasSessionCookie(req);
 
   if (pathname === "/login") {
     if (isLoggedIn) {
