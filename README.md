@@ -59,8 +59,20 @@ Open [http://localhost:3000](http://localhost:3000) → **/login** → **Continu
 
 ## Deploy (Vercel)
 
-Add the same env vars in Vercel project settings. Set production redirect URI in Google Console to  
+In Vercel → **Settings → Environment Variables**, add:
+
+| Variable | Value |
+|----------|--------|
+| `DATABASE_URL` | Neon **pooled** connection string (`-pooler` in hostname) |
+| `AUTH_SECRET` | Same as local |
+| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Same as local |
+| `AUTH_URL` | `https://your-app.vercel.app` (no trailing slash) |
+| `OPENROUTER_API_KEY` | Same as local |
+
+In Google Console, set redirect URI to  
 `https://your-domain.vercel.app/api/auth/callback/google`.
+
+Redeploy after changing env vars.
 
 ## Project structure
 
