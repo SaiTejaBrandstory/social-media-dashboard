@@ -1,64 +1,62 @@
-/* ========= STORAGE SHIM (local file / any browser — Claude artifact API optional) ========= */
-(function(){
-  if(typeof window.storage==='object'&&window.storage!==null&&typeof window.storage.list==='function') return;
-  var NS='brandstory_ssc:';
-  function allRawKeys(){ var out=[],i,l,rk; try{ l=localStorage.length; }catch(e){ return out; } for(i=0;i<l;i++){ rk=localStorage.key(i); if(rk!==null&&rk.indexOf(NS)===0) out.push(rk); } return out; }
-  window.storage={
-    list:function(prefix){
-      prefix=String(prefix==null?'':prefix);
-      var keys=[], i, raw, shortK, arr=allRawKeys();
-      for(i=0;i<arr.length;i++){
-        raw=arr[i]; shortK=raw.slice(NS.length);
-        if(!prefix||shortK.indexOf(prefix)===0) keys.push(shortK);
-      }
-      return Promise.resolve({keys:keys});
-    },
-    get:function(key){
-      var v;
-      try{ v=localStorage.getItem(NS+key); }catch(e){ v=null; }
-      if(v===null) return Promise.resolve(null);
-      return Promise.resolve({value:v});
-    },
-    set:function(key,val){
-      try{ localStorage.setItem(NS+key,String(val)); return Promise.resolve(true); }catch(e){ console.error(e); return Promise.resolve(null); }
-    },
-    delete:function(key){ try{ localStorage.removeItem(NS+key); }catch(e){} return Promise.resolve(); }
-  };
-})();
+/* ========= API + STORAGE (Neon via Next.js API) ========= */
+async function apiJson(url, opts={}){
+  const headers={'Content-Type':'application/json',...(opts.headers||{})};
+  const r=await fetch(url,{...opts,headers,credentials:'include'});
+  if(r.status===401){ window.location.href='/login'; throw new Error('Unauthorized'); }
+  if(!r.ok){
+    const t=await r.text();
+    throw new Error(t.slice(0,400)||('HTTP '+r.status));
+  }
+  if(r.status===204) return null;
+  const text=await r.text();
+  if(!text) return null;
+  return JSON.parse(text);
+}
 
-/* ========= STORAGE LAYER ========= */
 const Store = {
-  async listBrands(){
-    try{ const r=await window.storage.list('brand:'); const keys=r?.keys||[]; const out=[]; for(const k of keys){ try{ const v=await window.storage.get(k); if(v) out.push(JSON.parse(v.value)); }catch(e){} } return out.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)); }catch(e){return []}
+  async listBrands(){ return apiJson('/api/brands')||[]; },
+  async getBrand(id){
+    const brands=await this.listBrands();
+    return brands.find(b=>b.id===id)||null;
   },
-  async getBrand(id){ try{ const r=await window.storage.get('brand:'+id); return r?JSON.parse(r.value):null }catch(e){return null} },
   async saveBrand(b){
     b.updatedAt=Date.now();
     b.id=b.id||('b_'+Math.random().toString(36).slice(2,10));
-    try{
-      const result=await window.storage.set('brand:'+b.id,JSON.stringify(b));
-      if(!result) throw new Error('Storage returned null — quota may be exceeded');
-      return b;
-    }catch(e){
-      console.error('saveBrand failed:',e);
-      throw e;
-    }
+    return apiJson('/api/brands',{method:'POST',body:JSON.stringify(b)});
   },
   async deleteBrand(id){
-    try{ await window.storage.delete('brand:'+id); }catch(e){}
-    try{ const cal=await window.storage.list('cal:'+id+':'); for(const k of (cal?.keys||[])) await window.storage.delete(k); }catch(e){}
-    try{ const br=await window.storage.list('brief:'+id+':'); for(const k of (br?.keys||[])) await window.storage.delete(k); }catch(e){}
-    try{ const tr=await window.storage.list('trends:'+id+':'); for(const k of (tr?.keys||[])) await window.storage.delete(k); }catch(e){}
+    await apiJson('/api/brands/'+encodeURIComponent(id),{method:'DELETE'});
   },
-  async saveCalendar(brandId,cal){ const id=cal.id||('cal_'+Date.now()); cal.id=id; cal.brandId=brandId; cal.createdAt=cal.createdAt||Date.now(); await window.storage.set(`cal:${brandId}:${id}`,JSON.stringify(cal)); return cal; },
-  async listCalendars(brandId){ try{ const r=await window.storage.list(`cal:${brandId}:`); const out=[]; for(const k of (r?.keys||[])){ try{ const v=await window.storage.get(k); if(v) out.push(JSON.parse(v.value)); }catch(e){} } return out.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)); }catch(e){return []} },
-  async deleteCalendar(brandId,calId){ try{ await window.storage.delete(`cal:${brandId}:${calId}`); }catch(e){} },
-  async saveBrief(brandId,brief){ const id=brief.id||('br_'+Date.now()+'_'+Math.random().toString(36).slice(2,6)); brief.id=id; brief.brandId=brandId; brief.createdAt=brief.createdAt||Date.now(); await window.storage.set(`brief:${brandId}:${id}`,JSON.stringify(brief)); return brief; },
-  async listBriefs(brandId){ try{ const r=await window.storage.list(`brief:${brandId}:`); const out=[]; for(const k of (r?.keys||[])){ try{ const v=await window.storage.get(k); if(v) out.push(JSON.parse(v.value)); }catch(e){} } return out.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)); }catch(e){return []} },
-  async deleteBrief(brandId,id){ try{ await window.storage.delete(`brief:${brandId}:${id}`); }catch(e){} },
-  async listAllBriefs(){ try{ const r=await window.storage.list('brief:'); const out=[]; for(const k of (r?.keys||[])){ try{ const v=await window.storage.get(k); if(v) out.push(JSON.parse(v.value)); }catch(e){} } return out.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)); }catch(e){return []} },
-  async saveTrends(brandId,trends){ trends.id='latest'; trends.brandId=brandId; trends.createdAt=Date.now(); await window.storage.set(`trends:${brandId}:latest`,JSON.stringify(trends)); return trends; },
-  async getTrends(brandId){ try{ const r=await window.storage.get(`trends:${brandId}:latest`); return r?JSON.parse(r.value):null; }catch(e){return null} }
+  async saveCalendar(brandId,cal){
+    const id=cal.id||('cal_'+Date.now());
+    cal.id=id; cal.brandId=brandId; cal.createdAt=cal.createdAt||Date.now();
+    return apiJson('/api/brands/'+encodeURIComponent(brandId)+'/calendars',{method:'POST',body:JSON.stringify(cal)});
+  },
+  async listCalendars(brandId){
+    return apiJson('/api/brands/'+encodeURIComponent(brandId)+'/calendars')||[];
+  },
+  async deleteCalendar(brandId,calId){
+    await apiJson('/api/calendars/'+encodeURIComponent(calId)+'?brandId='+encodeURIComponent(brandId),{method:'DELETE'});
+  },
+  async saveBrief(brandId,brief){
+    const id=brief.id||('br_'+Date.now()+'_'+Math.random().toString(36).slice(2,6));
+    brief.id=id; brief.brandId=brandId; brief.createdAt=brief.createdAt||Date.now();
+    return apiJson('/api/brands/'+encodeURIComponent(brandId)+'/briefs',{method:'POST',body:JSON.stringify(brief)});
+  },
+  async listBriefs(brandId){
+    return apiJson('/api/brands/'+encodeURIComponent(brandId)+'/briefs')||[];
+  },
+  async deleteBrief(brandId,id){
+    await apiJson('/api/briefs/'+encodeURIComponent(id)+'?brandId='+encodeURIComponent(brandId),{method:'DELETE'});
+  },
+  async listAllBriefs(){ return apiJson('/api/briefs')||[]; },
+  async saveTrends(brandId,trends){
+    trends.id='latest'; trends.brandId=brandId; trends.createdAt=Date.now();
+    return apiJson('/api/brands/'+encodeURIComponent(brandId)+'/trends',{method:'PUT',body:JSON.stringify(trends)});
+  },
+  async getTrends(brandId){
+    try{ return await apiJson('/api/brands/'+encodeURIComponent(brandId)+'/trends'); }catch(e){ return null; }
+  },
 };
 
 /* ========= LLM API (Vercel serverless proxy) ========= */
@@ -192,7 +190,7 @@ function tolerantJSONParse(txt){
 const state={ view:'brands', brands:[], activeBrandId:null, calendars:[], activeCalendar:null, briefs:[], trends:null, allBriefs:[], loading:false, modal:null, toast:null };
 
 function setState(p){ Object.assign(state,p); render(); }
-function showToast(msg,kind='ok'){ state.toast={msg,kind}; render(); const dur=kind==='err'?7000:3500; setTimeout(()=>{state.toast=null;render()},dur); }
+function showToast(msg,kind='ok',durMs){ state.toast={msg,kind}; render(); const dur=durMs||(kind==='err'?7000:3500); setTimeout(()=>{state.toast=null;render()},dur); }
 
 /* ========= ICONS ========= */
 const ICONS={
@@ -296,11 +294,26 @@ function renderTopbar(){
       `:''}
     </div>
     <div class="flex items-center gap-2">
+      ${renderGoogleAuthTopbar()}
       ${state.view==='brands'?`<button class="btn primary" data-action="new-brand">${ICONS.plus} New Brand</button>`:''}
       ${state.view==='calendar'&&brand?`<button class="btn primary" data-action="generate-calendar">${ICONS.spark} Generate Calendar</button>`:''}
       ${state.view==='trends'&&brand?`<button class="btn primary" data-action="fetch-trends">${ICONS.refresh} ${state.trends?'Refresh':'Fetch'} Trends</button>`:''}
     </div>
   </div>`;
+}
+
+function renderGoogleAuthTopbar(){
+  const session=window.__BRANDSTORY_SESSION__;
+  if(!session?.user) return '';
+  const user=session.user;
+  const label=esc(user.email||user.name||'Account');
+  const pic=user.image?`<img src="${esc(user.image)}" alt="" class="w-7 h-7 rounded-full border border-[var(--line)]" referrerpolicy="no-referrer"/>`:'';
+  return `
+    <div class="flex items-center gap-2 pr-2 border-r border-[var(--line)] mr-1">
+      ${pic}
+      <span class="text-[12px] text-[var(--ink2)] max-w-[160px] truncate hidden sm:inline" title="${label}">${label}</span>
+      <a class="btn" href="/api/auth/signout">Sign out</a>
+    </div>`;
 }
 
 /* ========= VIEWS ========= */
@@ -2224,10 +2237,18 @@ const EXPORT_COLS = [
   {key:'status', label:'Status'},
 ];
 
-function exportCSV(){
+function requireExportData(){
   const {posts, calendar} = getExportPosts();
-  if(!calendar){ showToast('No calendar selected','err'); return; }
-  if(!posts.length){ showToast('No posts to export (filters may be hiding them)','err'); return; }
+  if(!calendar){ showToast('No calendar selected','err'); return null; }
+  if(!posts.length){ showToast('No posts to export (filters may be hiding them)','err'); return null; }
+  return {posts, calendar};
+}
+
+function exportFilename(calendar, posts, ext){
+  return `${slug(calendar.title)}_${posts.length}posts.${ext}`;
+}
+
+function buildCSVContent(posts){
   const header = EXPORT_COLS.map(c=>c.label).join(',');
   const rows = posts.map(p=>EXPORT_COLS.map(c=>{
     let v = p[c.key];
@@ -2235,19 +2256,15 @@ function exportCSV(){
     v = String(v||'').replace(/"/g,'""').replace(/\r?\n/g,' ');
     return `"${v}"`;
   }).join(','));
-  // BOM for Excel UTF-8 compatibility
-  const csv = '\ufeff' + [header, ...rows].join('\n');
-  download(csv, `${slug(calendar.title)}_${posts.length}posts.csv`, 'text/csv;charset=utf-8;');
-  showToast(`Exported ${posts.length} posts as CSV`,'ok');
+  return '\ufeff' + [header, ...rows].join('\n');
 }
 
-function exportXLSX(){
-  if(typeof XLSX === 'undefined'){ showToast('Excel library not loaded — try CSV','err'); return; }
-  const {posts, calendar} = getExportPosts();
-  if(!calendar){ showToast('No calendar selected','err'); return; }
-  if(!posts.length){ showToast('No posts to export','err'); return; }
+function buildMarkdownContent(posts, calendar){
+  const cols=['Date','Day','Platform','Funnel','Intent','Hook Type','Content ID','Format','Hook','Caption','CTA','EVI','Sentiment','Status'];
+  return `# ${calendar.title}\n\n_${posts.length} posts · exported ${new Date().toLocaleString()}_\n\n| ${cols.join(' | ')} |\n|${cols.map(_=>'---').join('|')}|\n${posts.map(p=>`| ${[p.date,p.day,p.platform,p.funnel_stage,p.intent,p.hook_type,p.content_id,p.format,(p.hook||'').replace(/\|/g,'\\|'),(p.caption_preview||'').replace(/\|/g,'\\|').replace(/\n/g,' '),p.cta,p.evi_score,p.sentiment,p.status].join(' | ')} |`).join('\n')}\n`;
+}
 
-  // Build rows of objects matching EXPORT_COLS
+function buildXLSXWorkbook(posts, calendar){
   const data = posts.map(p=>{
     const row = {};
     EXPORT_COLS.forEach(c=>{ row[c.label] = p[c.key] ?? ''; });
@@ -2255,8 +2272,6 @@ function exportXLSX(){
   });
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(data, {header: EXPORT_COLS.map(c=>c.label)});
-
-  // Set column widths based on column type
   const widths = EXPORT_COLS.map(c=>{
     if(c.key==='hook' || c.key==='caption_preview') return {wch:50};
     if(c.key==='creative_direction' || c.key==='visual_specs') return {wch:42};
@@ -2266,10 +2281,7 @@ function exportXLSX(){
     return {wch:18};
   });
   ws['!cols'] = widths;
-  // Freeze header row
   ws['!freeze'] = {xSplit:0, ySplit:1};
-
-  // Build a summary sheet
   const totalEvi = posts.reduce((s,p)=>s+(p.evi_score||0),0);
   const avgEvi = (totalEvi/posts.length).toFixed(2);
   const dist = {TOFU:0,MOFU:0,BOFU:0};
@@ -2291,28 +2303,20 @@ function exportXLSX(){
   ];
   const summaryWs = XLSX.utils.json_to_sheet(summary);
   summaryWs['!cols'] = [{wch:32},{wch:40}];
-
   XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
   XLSX.utils.book_append_sheet(wb, ws, 'Calendar');
-  XLSX.writeFile(wb, `${slug(calendar.title)}_${posts.length}posts.xlsx`);
-  showToast(`Exported ${posts.length} posts as Excel`,'ok');
+  return wb;
 }
 
-function exportPDF(){
-  const {posts, calendar} = getExportPosts();
-  if(!calendar){ showToast('No calendar selected','err'); return; }
-  if(!posts.length){ showToast('No posts to export','err'); return; }
-
+function buildPDFReportHtml(posts, calendar){
   const brand = state.brands.find(b=>b.id===calendar.brandId);
   const totalEvi = posts.reduce((s,p)=>s+(p.evi_score||0),0);
   const avgEvi = (totalEvi/posts.length).toFixed(2);
   const dist = {TOFU:0,MOFU:0,BOFU:0};
   posts.forEach(p=>{ if(dist[p.funnel_stage]!==undefined) dist[p.funnel_stage]++; });
-
   const stageColor = (s)=>({TOFU:'#0891b2',MOFU:'#7c3aed',BOFU:'#ea580c'})[s]||'#6b7280';
   const escHtml = (s)=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
-
-  const html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
 <title>${escHtml(calendar.title)}</title>
 <style>
@@ -2393,8 +2397,32 @@ function exportPDF(){
   </div>
 
 </body></html>`;
+}
 
-  // Open the print-ready HTML in a new window (avoid nested script tags in the HTML string — some parsers choke on them)
+function exportCSV(){
+  const data = requireExportData();
+  if(!data) return;
+  const {posts, calendar} = data;
+  const filename = exportFilename(calendar, posts, 'csv');
+  download(buildCSVContent(posts), filename, 'text/csv;charset=utf-8;');
+  showToast(`Exported ${posts.length} posts as CSV`,'ok');
+}
+
+function exportXLSX(){
+  if(typeof XLSX === 'undefined'){ showToast('Excel library not loaded — try CSV','err'); return; }
+  const data = requireExportData();
+  if(!data) return;
+  const {posts, calendar} = data;
+  const wb = buildXLSXWorkbook(posts, calendar);
+  XLSX.writeFile(wb, exportFilename(calendar, posts, 'xlsx'));
+  showToast(`Exported ${posts.length} posts as Excel`,'ok');
+}
+
+function exportPDF(){
+  const data = requireExportData();
+  if(!data) return;
+  const {posts, calendar} = data;
+  const html = buildPDFReportHtml(posts, calendar);
   const win = window.open('', '_blank');
   if(!win){
     showToast('Pop-up blocked — please allow pop-ups to download PDF','err');
@@ -2410,12 +2438,10 @@ function exportPDF(){
 }
 
 function exportMarkdown(){
-  const {posts, calendar} = getExportPosts();
-  if(!calendar){ showToast('No calendar selected','err'); return; }
-  if(!posts.length){ showToast('No posts to export','err'); return; }
-  const cols=['Date','Day','Platform','Funnel','Intent','Hook Type','Content ID','Format','Hook','Caption','CTA','EVI','Sentiment','Status'];
-  const md=`# ${calendar.title}\n\n_${posts.length} posts · exported ${new Date().toLocaleString()}_\n\n| ${cols.join(' | ')} |\n|${cols.map(_=>'---').join('|')}|\n${posts.map(p=>`| ${[p.date,p.day,p.platform,p.funnel_stage,p.intent,p.hook_type,p.content_id,p.format,(p.hook||'').replace(/\|/g,'\\|'),(p.caption_preview||'').replace(/\|/g,'\\|').replace(/\n/g,' '),p.cta,p.evi_score,p.sentiment,p.status].join(' | ')} |`).join('\n')}\n`;
-  download(md,`${slug(calendar.title)}_${posts.length}posts.md`,'text/markdown');
+  const data = requireExportData();
+  if(!data) return;
+  const {posts, calendar} = data;
+  download(buildMarkdownContent(posts, calendar), exportFilename(calendar, posts, 'md'), 'text/markdown');
   showToast(`Exported ${posts.length} posts as Markdown`,'ok');
 }
 
@@ -2438,7 +2464,8 @@ function avgEVI(posts){if(!posts||!posts.length) return 0; return posts.reduce((
 function countByFunnel(posts,stage){return (posts||[]).filter(p=>p.funnel_stage===stage).length}
 function funnelDistribution(posts){const d={TOFU:0,MOFU:0,BOFU:0}; (posts||[]).forEach(p=>{if(d[p.funnel_stage]!==undefined) d[p.funnel_stage]++}); return d;}
 function platformDistribution(posts){const d={}; (posts||[]).forEach(p=>{d[p.platform]=(d[p.platform]||0)+1}); return d;}
-function download(content,filename,mime){const blob=new Blob([content],{type:mime}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);}
+function download(content,filename,mime){const blob=new Blob([content],{type:mime}); downloadBlob(blob,filename);}
+function downloadBlob(blob,filename){const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);}
 
 /* ========= INIT ========= */
 (async function init(){
