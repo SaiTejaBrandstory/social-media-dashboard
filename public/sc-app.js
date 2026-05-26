@@ -196,7 +196,6 @@ function showToast(msg,kind='ok',durMs){ state.toast={msg,kind}; render(); const
 const ICONS={
   brands:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4v10l-9 4-9-4V7z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>',
   calendar:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
-  compare:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3M12 3v18"/></svg>',
   brief:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>',
   analytics:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16V9M12 16V5M17 16v-4"/></svg>',
   trends:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 7l-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/></svg>',
@@ -240,13 +239,18 @@ function render(){
       if(cursorPos !== null){ try{ el.setSelectionRange(cursorPos, cursorPos); }catch(e){} }
     }
   }
+
+  if(state._pendingScrollPostIdx != null){
+    const idx = state._pendingScrollPostIdx;
+    state._pendingScrollPostIdx = null;
+    performScrollToPost(idx);
+  }
 }
 
 function renderSidebar(){
   const items=[
     {k:'brands',label:'Brands',icon:ICONS.brands,count:state.brands.length},
     {k:'calendar',label:'Calendar',icon:ICONS.calendar},
-    {k:'compare',label:'Cross-Brand',icon:ICONS.compare},
     {k:'briefs',label:'Brief Library',icon:ICONS.brief},
     {k:'trends',label:'Industry Trends',icon:ICONS.trends},
     {k:'analytics',label:'EVI Analytics',icon:ICONS.analytics},
@@ -284,7 +288,7 @@ function renderTopbar(){
   return `
   <div class="border-b border-[var(--line)] bg-white px-6 py-3.5 flex items-center justify-between gap-4 sticky top-0 z-10">
     <div class="flex items-center gap-3">
-      <div class="text-[15px] font-semibold capitalize">${({brands:'Brand Portfolio',calendar:'Content Calendar',compare:'Cross-Brand Comparison',briefs:'Creative Brief Library',trends:'Industry Intelligence',analytics:'EVI & Funnel Analytics'})[state.view]}</div>
+      <div class="text-[15px] font-semibold capitalize">${({brands:'Brand Portfolio',calendar:'Content Calendar',briefs:'Creative Brief Library',trends:'Industry Intelligence',analytics:'EVI & Funnel Analytics'})[state.view]}</div>
       ${showBrandSwitcher?`
         <span class="text-[var(--ink3)]">/</span>
         <select class="select" style="width:auto;min-width:200px" id="brand-switcher">
@@ -321,7 +325,6 @@ function renderView(){
   switch(state.view){
     case 'brands': return renderBrandsView();
     case 'calendar': return renderCalendarView();
-    case 'compare': return renderCompareView();
     case 'briefs': return renderBriefsView();
     case 'trends': return renderTrendsView();
     case 'analytics': return renderAnalyticsView();
@@ -478,7 +481,7 @@ function renderCalendarDetail(c,brand){
       ${renderMonthGrid(posts)}
     </div>
 
-    <div class="panel p-0">
+    <div class="panel p-0" id="all-posts-panel">
       <div class="flex items-center justify-between p-4 flex-wrap gap-2">
         <div class="flex items-center gap-2">
           <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider">All Posts</div>
@@ -499,6 +502,112 @@ function renderFilterChipCount(posts){
   const filtered = applyPostFilters(posts);
   if(filtered.length === posts.length) return `<span class="pill mono">${posts.length}</span>`;
   return `<span class="pill mono">${filtered.length} <span style="opacity:.5">/ ${posts.length}</span></span>`;
+}
+
+const BRIEF_CONTENT_KEYS = [
+  'hook','objective','target_audience','core_message','script_copy',
+  'visual_direction','audio_direction','technical_specs','cta_block','compliance',
+  'content_id','platform','format','funnel_stage','evi_score','caption_preview','intent','hook_type','date','cta',
+];
+
+function extractBriefContent(obj){
+  const out = {};
+  if(!obj) return out;
+  BRIEF_CONTENT_KEYS.forEach(k=>{ if(obj[k] !== undefined && obj[k] !== null) out[k] = obj[k]; });
+  return out;
+}
+
+function newVariantId(){
+  return `bv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function formatVariantDateTime(ts){
+  if(!ts) return '—';
+  const d = new Date(ts);
+  if(Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function variantSourceLabel(source){
+  return ({ generated:'Generated', edited:'Edited', regenerated:'Regenerated' })[source] || 'Brief';
+}
+
+function normalizeBrief(b){
+  if(!b) return b;
+  if(b.variants?.length){
+    if(!b.activeVariantId) b.activeVariantId = b.variants[b.variants.length - 1].id;
+    return b;
+  }
+  const variants = [];
+  const activeId = newVariantId();
+  variants.push({
+    id: activeId,
+    ...extractBriefContent(b),
+    savedAt: b.savedAt || b.createdAt || Date.now(),
+    source: b.regenerated ? 'regenerated' : 'generated',
+  });
+  (b.versions || []).forEach((v, i)=>{
+    variants.push({
+      id: `bv_${b.id || 'legacy'}_hist_${i}_${v.savedAt || i}`,
+      ...extractBriefContent(v),
+      savedAt: v.savedAt || v.createdAt || Date.now(),
+      source: v.regenerated ? 'regenerated' : 'edited',
+    });
+  });
+  return { ...b, variants, activeVariantId: activeId, versions: undefined };
+}
+
+function getActiveVariant(brief){
+  const b = normalizeBrief(brief);
+  if(!b?.variants?.length) return null;
+  return b.variants.find(v=>v.id === b.activeVariantId) || b.variants[b.variants.length - 1];
+}
+
+function syncBriefRecordFromVariant(record, variant){
+  if(!record || !variant) return record;
+  Object.assign(record, extractBriefContent(variant));
+  return record;
+}
+
+function sortedBriefVariants(brief){
+  const b = normalizeBrief(brief);
+  return [...(b.variants || [])].sort((a, z)=>(z.savedAt || 0) - (a.savedAt || 0));
+}
+
+function briefActivityScore(b){
+  return b.savedAt || b.createdAt || 0;
+}
+
+/** Content from the user-selected active variant (used in table, popup, exports). */
+function getActiveBriefForPost(post){
+  const record = findBriefForPost(post);
+  if(!record) return null;
+  const active = getActiveVariant(record);
+  if(!active) return null;
+  return { ...extractBriefContent(active), id: record.id, brandId: record.brandId, content_id: record.content_id || active.content_id };
+}
+
+function findBriefForPost(post){
+  const briefs=state.briefs||[];
+  if(!post||!briefs.length) return null;
+  let matches = [];
+  if(post.content_id){
+    matches = briefs.filter(b=>b.content_id===post.content_id);
+  }
+  if(!matches.length){
+    matches = briefs.filter(b=>
+      b.platform===post.platform &&
+      b.hook===post.hook &&
+      b.format===post.format &&
+      b.funnel_stage===post.funnel_stage
+    );
+  }
+  if(!matches.length) return null;
+  const flagged = matches.filter(b=>b.isActive===true);
+  const pool = flagged.length ? flagged : matches;
+  const record = pool.reduce((best, b)=>
+    briefActivityScore(b) > briefActivityScore(best) ? b : best, pool[0]);
+  return normalizeBrief(record);
 }
 
 function applyPostFilters(posts){
@@ -602,30 +711,75 @@ function renderPostsTable(posts){
             <th>
               <button class="th-sort" data-post-sort="cta">CTA ${sortIcon('cta')}</button>
             </th>
-            <th></th>
+            <th style="min-width:130px"></th>
+            <th style="min-width:100px">Brief</th>
           </tr>
         </thead>
         <tbody>
-          ${filtered.length ? filtered.map(p=>`<tr>
+          ${filtered.length ? filtered.map(p=>{
+            const brief=getActiveBriefForPost(p);
+            return `<tr id="post-row-${p._idx}" data-post-row="${p._idx}">
             <td class="mono text-[var(--ink2)]">${esc(p.date||'')}</td>
             <td><span class="pill">${esc(p.platform||'')}</span></td>
             <td><span class="pill ${(p.funnel_stage||'').toLowerCase()}">${esc(p.funnel_stage||'')}</span></td>
-            <td class="font-medium" style="max-width:280px">${esc(truncate(p.hook||'',90))}</td>
+            <td class="font-medium cursor-pointer hover:text-[var(--accent)]" style="max-width:280px" data-post-detail="${p._idx}">${esc(truncate(p.hook||'',90))}</td>
             <td class="text-[var(--ink2)]">${esc(p.format||'')}</td>
             <td class="text-[var(--ink2)]">${esc(p.intent||'')}</td>
             <td><div class="flex items-center gap-2"><span class="mono text-[12px]">${(p.evi_score||0).toFixed(1)}</span><div class="ev-bar w-12"><div class="ev-fill" style="width:${Math.min(100,(p.evi_score||0)*10)}%"></div></div></div></td>
             <td class="text-[var(--ink2)] text-[11.5px]">${esc(truncate(p.cta||'',24))}</td>
-            <td><button class="btn ghost" style="padding:4px 8px" data-post-detail="${p._idx}">${ICONS.spark}</button></td>
-          </tr>`).join('') : `<tr><td colspan="9" class="text-center text-[var(--ink3)] py-8 text-[12px]">No posts match the current filters. <button class="text-[var(--accent)] underline ml-2" data-action="clear-post-filters">Clear filters</button></td></tr>`}
+            <td>
+              ${brief
+                ? ''
+                : `<button class="btn" style="padding:4px 10px;font-size:11.5px;white-space:nowrap" data-gen-brief-post="${p._idx}">${ICONS.spark} Generate Brief</button>`}
+            </td>
+            <td>
+              ${brief
+                ? `<button class="btn ghost" style="padding:4px 10px;font-size:11.5px;white-space:nowrap" data-view-brief="${state.activeBrandId}|${brief.id}">${ICONS.brief} View Brief</button>`
+                : ''}
+            </td>
+          </tr>`;
+          }).join('') : `<tr><td colspan="10" class="text-center text-[var(--ink3)] py-8 text-[12px]">No posts match the current filters. <button class="text-[var(--accent)] underline ml-2" data-action="clear-post-filters">Clear filters</button></td></tr>`}
         </tbody>
       </table>
     </div>
   `;
 }
 
+function isPostVisibleInTable(postIdx){
+  const posts = state.activeCalendar?.posts;
+  if(!posts || postIdx < 0 || postIdx >= posts.length) return false;
+  const withIdx = posts.map((p,i)=>({...p,_idx:i}));
+  return applyPostFilters(withIdx).some(p=>p._idx===postIdx);
+}
+
+function scrollToPostRow(postIdx){
+  if(!state.activeCalendar?.posts?.[postIdx]) return;
+  if(!isPostVisibleInTable(postIdx)){
+    state._pendingScrollPostIdx = postIdx;
+    const sortKey = state._postsFilter?.sortKey || 'date';
+    const sortDir = state._postsFilter?.sortDir || 'asc';
+    state._postsFilter = { sortKey, sortDir };
+    render();
+    showToast('Filters cleared to show this post','ok');
+    return;
+  }
+  performScrollToPost(postIdx);
+}
+
+function performScrollToPost(postIdx){
+  requestAnimationFrame(()=>{
+    const row = document.getElementById(`post-row-${postIdx}`);
+    if(!row) return;
+    document.getElementById('all-posts-panel')?.scrollIntoView({ behavior:'smooth', block:'start' });
+    row.scrollIntoView({ behavior:'smooth', block:'center' });
+    row.classList.add('post-row-highlight');
+    setTimeout(()=>row.classList.remove('post-row-highlight'), 2200);
+  });
+}
+
 function renderMonthGrid(posts){
   const byDate={};
-  posts.forEach(p=>{ const k=p.date||''; (byDate[k]=byDate[k]||[]).push(p); });
+  posts.forEach((p,idx)=>{ const k=p.date||''; (byDate[k]=byDate[k]||[]).push({post:p,idx}); });
   const dates=Object.keys(byDate).sort();
   if(!dates.length) return '<div class="empty">No dated posts to render.</div>';
   let html='<div class="grid grid-cols-7 gap-2">';
@@ -634,96 +788,14 @@ function renderMonthGrid(posts){
     const dayLabel=isNaN(day)?d:day.getDate();
     const dow=isNaN(day)?'':['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][day.getDay()];
     html+=`<div class="day-cell"><div class="dnum">${dow} ${dayLabel}</div>`;
-    byDate[d].slice(0,4).forEach(p=>{
-      html+=`<div class="post ${(p.funnel_stage||'').toLowerCase()}"><b>${esc(p.platform||'')}</b> · ${esc(truncate(p.hook||'',38))}</div>`;
+    byDate[d].slice(0,4).forEach(({post:p,idx})=>{
+      html+=`<div class="post post-cal-click ${(p.funnel_stage||'').toLowerCase()}" data-scroll-to-post="${idx}" role="button" tabindex="0" title="View in All Posts table"><b>${esc(p.platform||'')}</b> · ${esc(truncate(p.hook||'',38))}</div>`;
     });
     if(byDate[d].length>4) html+=`<div class="text-[10px] text-[var(--ink3)] mt-1">+${byDate[d].length-4} more</div>`;
     html+='</div>';
   }
   html+='</div>';
   return html;
-}
-
-/* ----- COMPARE VIEW ----- */
-function renderCompareView(){
-  if(state.brands.length<1) return renderSelectBrandHint('Add at least one brand to use cross-brand comparison.');
-  const sel=state._compareSel||state.brands.map(b=>b.id);
-  const data=(state._compareData||[]);
-  return `
-  <div class="panel p-4 mb-4">
-    <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider mb-3">Pick brands to compare</div>
-    <div class="flex flex-wrap gap-2">
-      ${state.brands.map(b=>`
-        <label class="pill cursor-pointer ${sel.includes(b.id)?'accent':''}">
-          <input type="checkbox" data-compare-toggle="${b.id}" ${sel.includes(b.id)?'checked':''} class="mr-1.5" />
-          ${esc(b.name)}
-        </label>
-      `).join('')}
-    </div>
-  </div>
-  ${data.length?renderCompareTable(data):`
-    <div class="panel empty">
-      <div class="text-[13px] font-semibold mb-1 text-[var(--ink)]">Select brands above</div>
-      <div class="text-[12px]">Comparison loads automatically as you select brands.</div>
-    </div>
-  `}`;
-}
-
-function renderCompareTable(data){
-  return `
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-    <div class="panel p-4">
-      <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider mb-3">Calendar Output Comparison</div>
-      <table>
-        <thead><tr><th>Brand</th><th>Calendars</th><th>Posts</th><th>Avg EVI</th><th>Top Platform</th></tr></thead>
-        <tbody>
-        ${data.map(d=>`<tr>
-          <td><div class="flex items-center gap-2"><div class="w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10.5px] font-bold" style="background:${brandColor(d.brand.name)}">${initials(d.brand.name)}</div><span class="font-medium">${esc(d.brand.name)}</span></div></td>
-          <td class="mono">${d.calCount}</td>
-          <td class="mono">${d.totalPosts}</td>
-          <td><span class="mono ${d.avgEVI>=7?'text-[var(--good)]':d.avgEVI>=5.5?'text-[var(--warn)]':'text-[var(--bad)]'}">${d.avgEVI.toFixed(1)}</span></td>
-          <td>${d.topPlatform?`<span class="pill">${esc(d.topPlatform)}</span>`:'<span class="text-[var(--ink3)]">—</span>'}</td>
-        </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>
-    <div class="panel p-4">
-      <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider mb-3">Funnel Distribution</div>
-      <div class="space-y-3">
-        ${data.map(d=>{
-          const total=d.dist.TOFU+d.dist.MOFU+d.dist.BOFU||1;
-          return `<div>
-            <div class="flex justify-between text-[12px] mb-1.5"><span class="font-medium">${esc(d.brand.name)}</span><span class="mono text-[var(--ink3)]">${total} posts</span></div>
-            <div class="flex h-3 rounded-full overflow-hidden bg-[var(--panel3)] border border-[var(--line)]">
-              <div style="width:${d.dist.TOFU/total*100}%;background:var(--tofu)" title="TOFU ${d.dist.TOFU}"></div>
-              <div style="width:${d.dist.MOFU/total*100}%;background:var(--mofu)" title="MOFU ${d.dist.MOFU}"></div>
-              <div style="width:${d.dist.BOFU/total*100}%;background:var(--bofu)" title="BOFU ${d.dist.BOFU}"></div>
-            </div>
-            <div class="flex gap-3 mt-1 text-[10.5px] text-[var(--ink3)] mono">
-              <span>T ${Math.round(d.dist.TOFU/total*100)}%</span><span>M ${Math.round(d.dist.MOFU/total*100)}%</span><span>B ${Math.round(d.dist.BOFU/total*100)}%</span>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>
-    <div class="panel p-4 lg:col-span-2">
-      <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider mb-3">Brand Profile Snapshot</div>
-      <table>
-        <thead><tr><th>Brand</th><th>Vertical</th><th>Model</th><th>Tier</th><th>Cycle</th><th>AOV</th><th>Goal</th></tr></thead>
-        <tbody>
-        ${data.map(d=>`<tr>
-          <td class="font-medium">${esc(d.brand.name)}</td>
-          <td class="text-[var(--ink2)]">${esc(d.brand.vertical||'—')}</td>
-          <td><span class="pill">${esc(d.brand.business_model||'—')}</span></td>
-          <td>${esc(d.brand.price_sensitivity_tier||'—')}</td>
-          <td>${esc(d.brand.purchase_cycle_length||'—')}</td>
-          <td class="mono">${esc(d.brand.avg_transaction_value||'—')}</td>
-          <td class="text-[var(--ink2)] text-[11.5px]" style="max-width:240px">${esc(truncate(d.brand.growth_objective||'—',60))}</td>
-        </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>
-  </div>`;
 }
 
 /* ----- BRIEFS LIBRARY ----- */
@@ -742,7 +814,7 @@ function renderBriefsView(){
     if(!byBrand[name]) byBrand[name]={brand:br, briefs:[]};
     byBrand[name].briefs.push(b);
   });
-  const totalVersions = all.reduce((s,b)=>s + ((b.versions?.length||0)+1), 0);
+  const totalVersions = all.reduce((s,b)=>s + (normalizeBrief(b).variants?.length || 1), 0);
   return `
   <div class="panel p-4 mb-4">
     <div class="grid grid-cols-3 gap-3">
@@ -755,7 +827,7 @@ function renderBriefsView(){
         <div class="text-[20px] font-semibold mono">${all.length}</div>
       </div>
       <div class="panel2 p-3">
-        <div class="text-[10.5px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Total versions</div>
+        <div class="text-[10.5px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Saved brief copies</div>
         <div class="text-[20px] font-semibold mono text-[var(--accent2)]">${totalVersions}</div>
       </div>
     </div>
@@ -764,7 +836,7 @@ function renderBriefsView(){
     ${Object.entries(byBrand).map(([brand, data])=>{
       const items = data.briefs;
       const brandObj = data.brand;
-      const totalV = items.reduce((s,b)=>s+(b.versions?.length||0)+1,0);
+      const totalV = items.reduce((s,b)=>s+(normalizeBrief(b).variants?.length||1),0);
       return `
       <div>
         <div class="flex items-center gap-2 mb-3">
@@ -775,14 +847,17 @@ function renderBriefsView(){
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           ${items.map(b=>{
-            const vCount = (b.versions?.length||0)+1;
+            const norm = normalizeBrief(b);
+            const activeV = getActiveVariant(norm);
+            const vCount = norm.variants?.length || 1;
             const lastEdit = b.savedAt || b.createdAt;
+            const previewText = activeV?.script_copy || activeV?.objective || activeV?.core_message || b.script_copy || b.objective || '';
             return `
             <div class="panel p-4 fadein">
               <div class="flex items-center justify-between mb-2">
                 <div class="flex items-center gap-1.5">
                   <span class="pill ${(b.funnel_stage||'').toLowerCase()}">${esc(b.funnel_stage||'')}</span>
-                  <span class="pill mono" title="${vCount} total versions">v${vCount}</span>
+                  <span class="pill mono" title="${vCount} saved copies">${vCount} copies</span>
                   ${b.regenerated?`<span class="pill accent" style="padding:1px 5px;font-size:10px">↻</span>`:''}
                 </div>
                 <span class="mono text-[11px] text-[var(--ink3)]">EVI ${(b.evi_score||0).toFixed(1)}</span>
@@ -792,7 +867,7 @@ function renderBriefsView(){
                 <span class="pill">${esc(b.platform||'')}</span>
                 <span class="pill">${esc(b.format||'')}</span>
               </div>
-              <div class="text-[11px] text-[var(--ink2)] line-clamp-3 mb-3" style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">${esc(truncate(b.objective||'',150))}</div>
+              <div class="text-[11px] text-[var(--ink2)] mb-3 max-h-32 overflow-y-auto whitespace-pre-wrap leading-relaxed">${esc(previewText)}</div>
               <div class="text-[10.5px] text-[var(--ink3)] mb-3">Last edit ${timeAgo(lastEdit)}</div>
               <div class="flex gap-2">
                 <button class="btn primary" style="padding:5px 10px;flex:1;font-size:12px" data-view-brief="${b.brandId}|${b.id}">View / Edit</button>
@@ -1115,6 +1190,7 @@ function renderGenerateCalendarModal(m){
 
 function renderPostDetailModal(m){
   const post=m.data;
+  const briefFlow=!!m.briefFlow;
   const editMode = !!state._postEdit;
   const editing = editMode ? state._postEdit : post;
   const versions = post.versions || [];
@@ -1199,9 +1275,13 @@ function renderPostDetailModal(m){
         </div>
       `:''}
 
+      ${briefFlow&&!editMode?`<div class="panel2 p-3 mb-4 text-[12.5px] text-[var(--ink2)]" style="border-color:rgba(124,92,255,.35);background:rgba(124,92,255,.06)">
+        Review this post, then generate a production-grade creative brief. You can edit fields first if needed.
+      </div>`:''}
+
       <div class="flex justify-between gap-2 mt-5 pt-4 border-t border-[var(--line)]">
         <div class="flex gap-2">
-          ${!editMode?`<button class="btn" data-action="brief-from-post">${ICONS.spark} Generate Creative Brief</button>`:''}
+          ${!editMode?`<button class="btn primary" data-action="brief-from-post">${ICONS.spark} Generate Creative Brief</button>`:''}
         </div>
         <div class="flex gap-2">
           ${editMode?`
@@ -1219,11 +1299,12 @@ function renderPostDetailModal(m){
 }
 
 function renderBriefDetailModal(m){
-  const b=m.data;
+  const record = normalizeBrief(m.data);
+  const active = getActiveVariant(record);
   const editMode = !!state._briefEdit;
-  const editing = editMode ? state._briefEdit : b;
-  const versions = b.versions || [];
-  const showHistory = !!state._briefShowHist;
+  const editing = editMode ? state._briefEdit : active;
+  const alternates = sortedBriefVariants(record).filter(v=>v.source === 'regenerated');
+  const showRegenerated = !!state._briefShowRegenerated;
 
   const fields = [
     ['hook','Hook (first 3 seconds)','input'],
@@ -1242,27 +1323,32 @@ function renderBriefDetailModal(m){
     <div class="panel p-6 w-full max-w-4xl max-h-[92vh] overflow-auto scroll" onclick="event.stopPropagation()">
       <div class="flex items-start justify-between mb-4 gap-3">
         <div class="flex items-center gap-2 flex-wrap">
-          <span class="pill ${(b.funnel_stage||'').toLowerCase()}">${esc(b.funnel_stage||'')}</span>
-          <span class="pill">${esc(b.platform||'')}</span>
-          <span class="pill">${esc(b.format||'')}</span>
-          <span class="pill mono">EVI ${(b.evi_score||0).toFixed(1)}</span>
-          ${b.content_id?`<span class="pill mono">${esc(b.content_id)}</span>`:''}
-          ${versions.length?`<span class="pill accent">v${versions.length+1}</span>`:`<span class="pill">v1</span>`}
+          <span class="pill ${(record.funnel_stage||'').toLowerCase()}">${esc(record.funnel_stage||'')}</span>
+          <span class="pill">${esc(record.platform||'')}</span>
+          <span class="pill">${esc(record.format||'')}</span>
+          <span class="pill mono">EVI ${(record.evi_score||0).toFixed(1)}</span>
+          ${record.content_id?`<span class="pill mono">${esc(record.content_id)}</span>`:''}
         </div>
         <button class="btn ghost" data-close-modal>${ICONS.close}</button>
       </div>
 
       ${editMode?`<div class="panel2 p-2.5 mb-4 flex items-center gap-2" style="border-color:rgba(124,92,255,.4);background:rgba(124,92,255,.06)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7c5cff" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-        <div class="text-[12px] text-[var(--ink)] flex-1"><b>Editing mode</b> — make changes, then click <b>Save</b> to commit a new version, or <b>Cancel Edit</b> to discard.</div>
+        <div class="text-[12px] text-[var(--ink)] flex-1"><b>Editing this brief</b> — Save overwrites the active copy only. No new brief is created.</div>
       </div>`:''}
 
       ${editMode?`
         <div class="mb-4">
           <label class="label">Hook / Title</label>
-          <input class="input" data-brief-field="hook" value="${esc(editing.hook||'')}"/>
+          <input class="input" data-brief-field="hook" value="${esc(editing?.hook||'')}"/>
         </div>
-      `:`<div class="text-[18px] font-semibold mb-4">${esc(b.hook||b.objective||'Brief')}</div>`}
+      `:`<div class="mb-4">
+        <div class="flex items-center gap-2 flex-wrap mb-1">
+          <div class="text-[18px] font-semibold">${esc(active?.hook||active?.objective||'Brief')}</div>
+          <span class="pill accent">Active</span>
+        </div>
+        ${active?`<div class="text-[11px] text-[var(--ink3)] mono">${esc(formatVariantDateTime(active.savedAt))} · ${esc(variantSourceLabel(active.source))}</div>`:''}
+      </div>`}
 
       <div class="space-y-3">
         ${fields.filter(([k])=>k!=='hook').map(([k,label,type])=>{
@@ -1284,31 +1370,37 @@ function renderBriefDetailModal(m){
         }).join('')}
       </div>
 
-      ${versions.length?`
+      ${alternates.length?`
         <div class="mt-5 border-t border-[var(--line)] pt-4">
-          <button class="flex items-center gap-2 text-[12px] font-semibold text-[var(--ink2)] hover:text-[var(--ink)]" data-action="toggle-history">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${showHistory?'90deg':'0'});transition:transform .15s"><polyline points="9 18 15 12 9 6"/></svg>
-            <span>Version history</span>
-            <span class="pill mono" style="padding:1px 6px">${versions.length}</span>
+          <button type="button" class="flex items-center gap-2 text-[12px] font-semibold text-[var(--ink2)] hover:text-[var(--ink)] w-full text-left" data-action="toggle-regenerated-copies">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${showRegenerated?'90deg':'0deg'});transition:transform .15s"><polyline points="9 18 15 12 9 6"/></svg>
+            <span class="uppercase tracking-wider">Regenerated copies</span>
+            <span class="pill mono" style="padding:1px 6px">${alternates.length}</span>
           </button>
-          ${showHistory?`<div class="mt-3 space-y-2">${versions.map((v,i)=>{
-            const versionNum = versions.length - i;
-            return `<div class="panel2 p-3">
-              <div class="flex items-center justify-between mb-1.5">
-                <div class="flex items-center gap-2">
-                  <span class="pill mono">v${versionNum}</span>
-                  <span class="text-[11px] text-[var(--ink3)]">${timeAgo(v.savedAt||v.createdAt)}</span>
-                  ${v.regenerated?`<span class="pill accent">regenerated</span>`:`<span class="pill">edited</span>`}
+          ${showRegenerated?`
+          <div class="text-[11px] text-[var(--ink3)] mt-2 mb-3">The <b class="text-[var(--ink2)]">active</b> brief is above (edit updates it). <b>Regenerate</b> adds another copy here — choose which one is active.</div>
+          <div class="space-y-2">
+            ${alternates.map(v=>{
+              const isActive = v.id === record.activeVariantId;
+              return `<div class="panel2 p-3 ${isActive?'glow':''}" style="${isActive?'border-color:rgba(124,92,255,.45)':''}">
+                <div class="flex items-start justify-between gap-2 mb-1.5">
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2 flex-wrap mb-1">
+                      ${isActive?`<span class="pill accent">Active</span>`:''}
+                      <span class="pill">${esc(variantSourceLabel(v.source))}</span>
+                      <span class="text-[11px] text-[var(--ink3)] mono">${esc(formatVariantDateTime(v.savedAt))}</span>
+                    </div>
+                    <div class="text-[12px] font-medium truncate">${esc(v.hook||v.objective||'(no title)')}</div>
+                    <div class="text-[11px] text-[var(--ink2)] mt-0.5 max-h-24 overflow-y-auto whitespace-pre-wrap leading-relaxed">${esc(v.script_copy||v.objective||v.core_message||'')}</div>
+                  </div>
+                  ${isActive
+                    ? `<span class="text-[11px] text-[var(--accent)] font-semibold shrink-0">In use</span>`
+                    : `<button type="button" class="btn primary shrink-0" style="padding:4px 10px;font-size:11px" data-set-active-variant="${v.id}">Set as active</button>`}
                 </div>
-                <div class="flex gap-1">
-                  <button class="btn ghost" style="padding:3px 8px;font-size:11px" data-action="restore-version" data-version-idx="${i}">Restore</button>
-                  <button class="btn ghost" style="padding:3px 8px;font-size:11px" data-action="view-version" data-version-idx="${i}">Compare</button>
-                </div>
-              </div>
-              <div class="text-[12px] font-medium mb-1 truncate">${esc(v.hook||v.objective||'(no title)')}</div>
-              <div class="text-[11px] text-[var(--ink2)] line-clamp-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(truncate(v.objective||v.core_message||'',180))}</div>
-            </div>`;
-          }).join('')}</div>`:''}
+              </div>`;
+            }).join('')}
+          </div>
+          `:''}
         </div>
       `:''}
 
@@ -1433,13 +1525,30 @@ function attachHandlers(){
   document.querySelectorAll('[data-open-brand]').forEach(el=>el.addEventListener('click',e=>{ setActiveBrand(el.dataset.openBrand); state.view='calendar'; loadBrandWorkspace(); }));
   document.querySelectorAll('[data-open-cal]').forEach(el=>el.addEventListener('click',()=>{ const c=state.calendars.find(x=>x.id===el.dataset.openCal); state.activeCalendar=c; render(); }));
   document.querySelectorAll('[data-delete-cal]').forEach(el=>el.addEventListener('click',e=>{ e.stopPropagation(); const id=el.dataset.deleteCal; openModal({kind:'confirm',title:'Delete calendar?',body:'This calendar and its posts will be removed.',danger:true,confirmLabel:'Delete',onYes:async()=>{ await Store.deleteCalendar(state.activeBrandId,id); state.calendars=await Store.listCalendars(state.activeBrandId); if(state.activeCalendar&&state.activeCalendar.id===id) state.activeCalendar=null; closeModal(); showToast('Calendar deleted','ok'); }}); }));
+  document.querySelectorAll('[data-scroll-to-post]').forEach(el=>{
+    const go=()=>scrollToPostRow(Number(el.dataset.scrollToPost));
+    el.addEventListener('click',e=>{ e.stopPropagation(); go(); });
+    el.addEventListener('keydown',e=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); go(); }
+    });
+  });
   document.querySelectorAll('[data-post-detail]').forEach(el=>el.addEventListener('click',()=>{ const i=Number(el.dataset.postDetail); openModal({kind:'post-detail',data:state.activeCalendar.posts[i]}); }));
-  document.querySelectorAll('[data-view-brief]').forEach(el=>el.addEventListener('click',async()=>{ const [bid,id]=el.dataset.viewBrief.split('|'); const briefs=await Store.listBriefs(bid); const b=briefs.find(x=>x.id===id); if(b) openModal({kind:'view-brief',data:b}); }));
+  document.querySelectorAll('[data-gen-brief-post]').forEach(el=>el.addEventListener('click',e=>{
+    e.stopPropagation();
+    const i=Number(el.dataset.genBriefPost);
+    openModal({kind:'post-detail', data:state.activeCalendar.posts[i], briefFlow:true});
+  }));
+  document.querySelectorAll('[data-view-brief]').forEach(el=>el.addEventListener('click',async e=>{
+    e.stopPropagation();
+    const [bid,id]=el.dataset.viewBrief.split('|');
+    let b=(state.briefs||[]).find(x=>x.id===id);
+    if(!b){ const briefs=await Store.listBriefs(bid); b=briefs.find(x=>x.id===id); }
+    if(b) openModal({kind:'view-brief',data:b});
+  }));
   document.querySelectorAll('[data-delete-brief]').forEach(el=>el.addEventListener('click',e=>{e.stopPropagation(); const [bid,id]=el.dataset.deleteBrief.split('|'); openModal({kind:'confirm',title:'Delete brief?',danger:true,body:'This brief will be permanently removed.',confirmLabel:'Delete',onYes:async()=>{ await Store.deleteBrief(bid,id); state.allBriefs=await Store.listAllBriefs(); closeModal(); showToast('Brief deleted','ok'); }});}));
-  document.querySelectorAll('[data-compare-toggle]').forEach(el=>el.addEventListener('change',async()=>{
-    const id=el.dataset.compareToggle; let sel=state._compareSel||state.brands.map(b=>b.id);
-    if(el.checked&&!sel.includes(id)) sel.push(id); if(!el.checked) sel=sel.filter(x=>x!==id);
-    state._compareSel=sel; await loadCompareData();
+  document.querySelectorAll('[data-set-active-variant]').forEach(el=>el.addEventListener('click',e=>{
+    e.stopPropagation();
+    setBriefVariantActive(el.dataset.setActiveVariant);
   }));
 
   // Channel selector handlers (in Generate Calendar modal)
@@ -1490,11 +1599,6 @@ function attachHandlers(){
   }));
 
   // Version restore handlers
-  document.querySelectorAll('[data-action="restore-version"]').forEach(el=>el.addEventListener('click',e=>{
-    e.stopPropagation();
-    const idx=Number(el.dataset.versionIdx);
-    restoreBriefVersion(idx);
-  }));
   document.querySelectorAll('[data-action="restore-post-version"]').forEach(el=>el.addEventListener('click',e=>{
     e.stopPropagation();
     const idx=Number(el.dataset.versionIdx);
@@ -1552,20 +1656,22 @@ function attachHandlers(){
 
 function goto(view){
   state.view=view;
-  if(view==='compare'){ render(); loadCompareData(); return; }
   if(view==='briefs'){ Store.listAllBriefs().then(b=>{ state.allBriefs=b; render(); }); return; }
   render();
 }
 
 async function setActiveBrand(id){ state.activeBrandId=id||null; state.activeCalendar=null; await loadBrandWorkspace(); }
 async function loadBrandWorkspace(){ if(!state.activeBrandId){ render(); return; } const [cs,bs,t]=await Promise.all([Store.listCalendars(state.activeBrandId),Store.listBriefs(state.activeBrandId),Store.getTrends(state.activeBrandId)]); state.calendars=cs; state.briefs=bs; state.trends=t; if(!state.activeCalendar&&cs.length) state.activeCalendar=cs[0]; render(); }
-async function loadCompareData(){ const sel=state._compareSel||state.brands.map(b=>b.id); const data=[]; for(const id of sel){ const brand=state.brands.find(b=>b.id===id); if(!brand) continue; const cals=await Store.listCalendars(id); const allPosts=cals.flatMap(c=>c.posts||[]); const dist={TOFU:0,MOFU:0,BOFU:0}; allPosts.forEach(p=>{ if(dist[p.funnel_stage]!==undefined) dist[p.funnel_stage]++; }); const platCounts={}; allPosts.forEach(p=>{platCounts[p.platform]=(platCounts[p.platform]||0)+1}); const top=Object.entries(platCounts).sort((a,b)=>b[1]-a[1])[0]; data.push({brand,calCount:cals.length,totalPosts:allPosts.length,avgEVI:avgEVI(allPosts),dist,topPlatform:top?top[0]:null}); } state._compareData=data; render(); }
-
-function openModal(m){ state.modal=m; render(); }
+function openModal(m){
+  if(m?.kind==='view-brief' && m.data) m = {...m, data: normalizeBrief(m.data)};
+  state.modal=m;
+  render();
+}
 function closeModal(){
   state.modal=null;
   state._chanSel=null; state._chanDays=null;
-  state._briefEdit=null; state._briefShowHist=false;
+  state._briefEdit=null; state._briefEditVariantId=null;
+  state._briefShowRegenerated=false;
   state._postEdit=null; state._postShowHist=false;
   render();
 }
@@ -1592,15 +1698,19 @@ async function handleAction(a){
   if(a==='retry-calendar'){ closeModal(); openModal({kind:'generate-calendar'}); return; }
 
   // Brief edit / save / regenerate
-  if(a==='edit-brief'){ state._briefEdit = {...state.modal.data}; render(); return; }
-  if(a==='cancel-edit-brief'){ state._briefEdit = null; render(); return; }
+  if(a==='edit-brief'){
+    const record = normalizeBrief(state.modal.data);
+    const active = getActiveVariant(record);
+    if(!active){ showToast('No active brief to edit','err'); return; }
+    state._briefEditVariantId = record.activeVariantId;
+    state._briefEdit = {...active};
+    render();
+    return;
+  }
+  if(a==='cancel-edit-brief'){ state._briefEdit = null; state._briefEditVariantId = null; render(); return; }
   if(a==='save-brief-edit') return saveBriefEdit();
   if(a==='regenerate-brief') return regenerateBrief();
-  if(a==='toggle-history'){ state._briefShowHist = !state._briefShowHist; render(); return; }
-  if(a==='restore-version'){
-    return; // handled via dedicated listener below
-  }
-  if(a==='view-version'){ /* compare placeholder */ return; }
+  if(a==='toggle-regenerated-copies'){ state._briefShowRegenerated = !state._briefShowRegenerated; render(); return; }
 
   // Post edit / save / regenerate
   if(a==='edit-post'){ state._postEdit = {...state.modal.data}; render(); return; }
@@ -1899,8 +2009,9 @@ async function runAutoBriefs(){
     let made=0;
     for(const p of top){
       const brief=await generateBriefForPost(p);
-      brief.brandId=state.activeBrandId;
-      await Store.saveBrief(state.activeBrandId,brief); made++;
+      const hadBrief = !!findBriefForPost(p);
+      await addBriefVariantForPost(state.activeBrandId, p, brief, 'generated', { activate: !hadBrief });
+      made++;
     }
     state.briefs=await Store.listBriefs(state.activeBrandId);
     state.allBriefs=await Store.listAllBriefs();
@@ -1908,17 +2019,30 @@ async function runAutoBriefs(){
   }catch(e){ closeModal(); showToast('Brief generation failed: '+e.message,'err'); }
 }
 
-async function briefFromCurrentPost(){
-  const post=state.modal.data;
-  closeModal(); openModal({kind:'loading',title:'Generating brief…',body:'Building a McKinsey-grade creative brief from this post.'});
+async function briefFromPost(post, opts={}){
+  if(!post||!state.activeBrandId) return;
+  const stayOnCalendar=!!opts.stayOnCalendar;
+  if(!stayOnCalendar) closeModal();
+  openModal({kind:'loading',title:'Generating brief…',body:'Building a McKinsey-grade creative brief from this post.'});
   try{
     const brief=await generateBriefForPost(post);
-    brief.brandId=state.activeBrandId;
-    await Store.saveBrief(state.activeBrandId,brief);
-    state.briefs=await Store.listBriefs(state.activeBrandId);
-    state.allBriefs=await Store.listAllBriefs();
-    closeModal(); openModal({kind:'view-brief',data:brief});
-  }catch(e){ closeModal(); showToast('Failed: '+e.message,'err'); }
+    brief.content_id=brief.content_id||post.content_id||'';
+    const hadBrief = !!findBriefForPost(post);
+    const saved = await addBriefVariantForPost(state.activeBrandId, post, brief, 'generated', { activate: !hadBrief });
+    closeModal();
+    if(stayOnCalendar){
+      render();
+      showToast(hadBrief ? 'New brief copy saved — Set as active in View Brief' : 'Brief generated and set as active','ok');
+    }else{
+      openModal({kind:'view-brief',data:saved});
+      showToast(hadBrief ? 'New copy added — choose Set as active below' : 'Brief generated','ok');
+    }
+  }catch(e){ closeModal(); showToast('Failed: '+e.message,'err'); if(stayOnCalendar) render(); }
+}
+
+async function briefFromCurrentPost(){
+  const stayOnCalendar=!!state.modal?.briefFlow;
+  return briefFromPost(state.modal.data, {stayOnCalendar});
 }
 
 async function generateBriefForPost(post){
@@ -1963,93 +2087,136 @@ Return JSON with these EXACT keys (all strings except evi_score, funnel_stage, p
   };
 }
 
-/* ===== BRIEF EDIT / SAVE / REGENERATE / RESTORE ===== */
-async function saveBriefEdit(){
-  const current = state.modal.data;
-  const edited = state._briefEdit;
-  if(!current || !edited){ return; }
-  const brandId = current.brandId;
-  // Snapshot the current as a version, then update in place with edited values
-  const versions = current.versions ? [...current.versions] : [];
-  // Push the previous live state (without versions array) as a new version entry
-  const snapshot = {...current}; delete snapshot.versions;
-  snapshot.savedAt = current.savedAt || current.createdAt;
-  snapshot.regenerated = false;
-  versions.unshift(snapshot);
-  const updated = {...current, ...edited, versions, savedAt: Date.now(), createdAt: current.createdAt};
+/* ===== BRIEF VARIANTS (save / regenerate / set active) ===== */
+async function refreshBriefsState(brandId){
+  state.briefs = await Store.listBriefs(brandId);
+  state.allBriefs = await Store.listAllBriefs();
+}
+
+async function persistBriefRecord(brandId, record){
+  const updated = normalizeBrief({ ...record, isActive: true });
+  const active = getActiveVariant(updated);
+  if(active) syncBriefRecordFromVariant(updated, active);
+  await Store.saveBrief(brandId, updated);
+  await refreshBriefsState(brandId);
+  return updated;
+}
+
+async function addBriefVariantForPost(brandId, post, content, source, { activate = false } = {}){
+  const contentId = content.content_id || post?.content_id || '';
+  const lookup = post || { content_id: contentId, platform: content.platform, hook: content.hook, format: content.format, funnel_stage: content.funnel_stage };
+  let record = findBriefForPost(lookup);
+  const variant = {
+    id: newVariantId(),
+    ...extractBriefContent(content),
+    savedAt: Date.now(),
+    source,
+  };
+  if(record){
+    record = normalizeBrief(record);
+    record = {
+      ...record,
+      variants: [...record.variants, variant],
+      activeVariantId: activate ? variant.id : record.activeVariantId,
+      savedAt: Date.now(),
+      isActive: true,
+    };
+  }else{
+    record = {
+      ...extractBriefContent(content),
+      brandId,
+      content_id: contentId,
+      variants: [variant],
+      activeVariantId: variant.id,
+      createdAt: Date.now(),
+      savedAt: Date.now(),
+      isActive: true,
+    };
+  }
+  return persistBriefRecord(brandId, record);
+}
+
+async function setBriefVariantActive(variantId){
+  const current = normalizeBrief(state.modal.data);
+  const variant = current.variants?.find(v=>v.id === variantId);
+  if(!variant){ showToast('Brief copy not found','err'); return; }
+  const updated = {
+    ...current,
+    activeVariantId: variantId,
+    savedAt: Date.now(),
+    isActive: true,
+  };
+  syncBriefRecordFromVariant(updated, variant);
   try{
-    await Store.saveBrief(brandId, updated);
-    state.briefs = await Store.listBriefs(brandId);
-    state.allBriefs = await Store.listAllBriefs();
+    const saved = await persistBriefRecord(current.brandId, updated);
     state._briefEdit = null;
-    state.modal = {kind:'view-brief', data: updated};
+    state.modal = { kind:'view-brief', data: saved };
     render();
-    showToast('Brief saved · version '+(versions.length+1)+' created','ok');
+    showToast('Active brief updated · exports will use this copy','ok');
+  }catch(e){ showToast('Could not set active: '+e.message,'err'); }
+}
+
+async function saveBriefEdit(){
+  const current = normalizeBrief(state.modal.data);
+  const edited = state._briefEdit;
+  if(!current || !edited) return;
+  const editId = state._briefEditVariantId || current.activeVariantId;
+  const variants = current.variants.map(v=>{
+    if(v.id !== editId) return v;
+    return {
+      ...v,
+      ...extractBriefContent(edited),
+      savedAt: Date.now(),
+    };
+  });
+  const updated = {
+    ...current,
+    variants,
+    activeVariantId: editId,
+    createdAt: current.createdAt,
+    savedAt: Date.now(),
+  };
+  syncBriefRecordFromVariant(updated, getActiveVariant(updated));
+  try{
+    const saved = await persistBriefRecord(current.brandId, updated);
+    state._briefEdit = null;
+    state._briefEditVariantId = null;
+    state.modal = { kind:'view-brief', data: saved };
+    render();
+    showToast('Brief saved — same copy updated','ok');
   }catch(e){ showToast('Save failed: '+e.message,'err'); console.error(e); }
 }
 
 async function regenerateBrief(){
-  const current = state.modal.data;
+  const current = normalizeBrief(state.modal.data);
   if(!current) return;
-  // Find the original post via content_id within active brand calendars
   const brand = state.brands.find(b=>b.id===current.brandId);
   if(!brand){ showToast('Source brand not found','err'); return; }
-  closeModalKeepEdits(false);
-  openModal({kind:'loading',title:'Regenerating brief…',body:'Building a fresh version with the same source post + brand context.',log:[]});
+  const brandId = current.brandId;
+  const sourcePost = {
+    content_id: current.content_id, platform: current.platform, format: current.format,
+    funnel_stage: current.funnel_stage, intent: current.intent || '', hook_type: current.hook_type || '',
+    hook: current.hook, caption_preview: current.caption_preview || current.hook,
+    cta: current.cta_block || '', evi_score: current.evi_score, date: current.date || '',
+  };
+  closeModal();
+  openModal({kind:'loading',title:'Regenerating brief…',body:'Building a fresh copy — your current active brief stays until you switch.',log:[]});
   try{
-    // Reconstruct a post object from the brief itself (it has all post metadata)
-    const sourcePost = {
-      content_id: current.content_id, platform: current.platform, format: current.format,
-      funnel_stage: current.funnel_stage, intent: current.intent || '', hook_type: current.hook_type || '',
-      hook: current.hook, caption_preview: current.caption_preview || current.hook,
-      cta: current.cta_block || '', evi_score: current.evi_score, date: current.date || ''
-    };
-    // Temporarily set the active brand so generateBriefForPost works
     const prevActive = state.activeBrandId;
-    state.activeBrandId = current.brandId;
+    state.activeBrandId = brandId;
     const fresh = await generateBriefForPost(sourcePost);
     state.activeBrandId = prevActive;
-    // Snapshot current as a version
-    const versions = current.versions ? [...current.versions] : [];
-    const snapshot = {...current}; delete snapshot.versions;
-    snapshot.savedAt = current.savedAt || current.createdAt;
-    snapshot.regenerated = false;
-    versions.unshift(snapshot);
-    const updated = {...current, ...fresh, versions, savedAt: Date.now(), regenerated: true};
-    await Store.saveBrief(current.brandId, updated);
-    state.briefs = await Store.listBriefs(current.brandId);
-    state.allBriefs = await Store.listAllBriefs();
+    const saved = await addBriefVariantForPost(brandId, sourcePost, fresh, 'regenerated', { activate: false });
     state._briefEdit = null;
     closeModal();
-    state.modal = {kind:'view-brief', data: updated};
+    state.modal = { kind:'view-brief', data: saved };
     render();
-    showToast('Brief regenerated · v'+(versions.length+1),'ok');
+    showToast('New brief copy added — Set as active to use it','ok');
   }catch(e){
     closeModal();
     showToast('Regenerate failed: '+e.message,'err');
     console.error(e);
   }
-}
-
-async function restoreBriefVersion(idx){
-  const current = state.modal.data;
-  if(!current || !current.versions || !current.versions[idx]){ return; }
-  const target = current.versions[idx];
-  // Snapshot current as a new version, restore target
-  const versions = [...current.versions];
-  const snapshot = {...current}; delete snapshot.versions;
-  snapshot.savedAt = current.savedAt || current.createdAt;
-  versions.unshift(snapshot);
-  versions.splice(idx+1, 1); // remove the one being restored from history
-  const restored = {...target, versions, savedAt: Date.now(), id: current.id, brandId: current.brandId, createdAt: current.createdAt};
-  try{
-    await Store.saveBrief(current.brandId, restored);
-    state.briefs = await Store.listBriefs(current.brandId);
-    state.allBriefs = await Store.listAllBriefs();
-    state.modal = {kind:'view-brief', data: restored};
-    render();
-    showToast('Restored to that version','ok');
-  }catch(e){ showToast('Restore failed: '+e.message,'err'); }
 }
 
 /* ===== POST EDIT / SAVE / REGENERATE / RESTORE ===== */
@@ -2215,27 +2382,83 @@ function getExportPosts(){
   return {posts: filtered, calendar: c};
 }
 
-// Standard column set across all formats (matches the All Posts table)
-const EXPORT_COLS = [
+// Same columns as PDF report (CSV, MD, XLSX, PDF)
+const REPORT_EXPORT_COLS = [
   {key:'date', label:'Date'},
   {key:'day', label:'Day'},
   {key:'platform', label:'Platform'},
   {key:'funnel_stage', label:'Stage'},
-  {key:'hook', label:'Hook / Headline'},
+  {key:'hook_headline', label:'Hook / Headline'},
   {key:'format', label:'Format'},
   {key:'intent', label:'Intent'},
   {key:'evi_score', label:'EVI'},
   {key:'cta', label:'CTA'},
   {key:'hook_type', label:'Hook Type'},
-  {key:'sentiment', label:'Sentiment'},
-  {key:'segment', label:'Segment'},
-  {key:'caption_preview', label:'Caption'},
-  {key:'creative_direction', label:'Creative Direction'},
-  {key:'visual_specs', label:'Visual Specs'},
-  {key:'tracking_url', label:'Tracking URL'},
-  {key:'content_id', label:'Content ID'},
-  {key:'status', label:'Status'},
+  {key:'brief_script_copy', label:'Brief Script / Copy'},
 ];
+
+/** Caption fold line often repeats hook — split so exports show hook once, then rest of caption. */
+function splitHookHeadline(hook, caption){
+  const h = String(hook||'').trim();
+  const c = String(caption||'').trim();
+  if(!h && !c) return { hook:'', caption:'' };
+  if(!c) return { hook:h, caption:'' };
+  if(!h) return { hook:'', caption:c };
+  if(c === h) return { hook:h, caption:'' };
+  const lines = c.split(/\r?\n/);
+  const first = lines[0].trim();
+  const norm = (s)=>s.replace(/\s+/g,' ').toLowerCase();
+  if(norm(first) === norm(h)) {
+    const rest = lines.slice(1).join('\n').trim();
+    return { hook:h, caption:rest };
+  }
+  if(c.startsWith(h)) {
+    let rest = c.slice(h.length).replace(/^[\s.:;,\-–—]+/, '').trim();
+    if(!rest) return { hook:h, caption:'' };
+    const restLines = rest.split(/\r?\n/);
+    if(norm(restLines[0].trim()) === norm(h)) rest = restLines.slice(1).join('\n').trim();
+    return { hook:h, caption:rest };
+  }
+  return { hook:h, caption:c };
+}
+
+function formatHookHeadlinePlain(hook, caption){
+  const { hook:h, caption:rest } = splitHookHeadline(hook, caption);
+  if(!h) return rest;
+  if(!rest) return h;
+  return `${h}\n${rest}`;
+}
+
+function enrichPostsForExport(posts){
+  return posts.map(p=>{
+    const brief = getActiveBriefForPost(p);
+    const row = {...p};
+    const parts = splitHookHeadline(p.hook, p.caption_preview);
+    row.export_hook = parts.hook;
+    row.export_caption = parts.caption;
+    row.hook_headline = formatHookHeadlinePlain(p.hook, p.caption_preview);
+    row.brief_script_copy = brief ? (brief.script_copy ?? '') : '';
+    return row;
+  });
+}
+
+function exportCellValue(row, col){
+  let v = row[col.key];
+  if(v == null) return '';
+  if(col.key === 'evi_score' && typeof v === 'number') return v.toFixed(1);
+  if(typeof v === 'number') return v;
+  return String(v);
+}
+
+function exportRowsToAoa(rows){
+  const header = REPORT_EXPORT_COLS.map(c=>c.label);
+  const body = rows.map(p=>REPORT_EXPORT_COLS.map(c=>exportCellValue(p, c)));
+  return [header, ...body];
+}
+
+function briefToMarkdown(brief){
+  return `**Platform:** ${brief.platform||''} | **Format:** ${brief.format||''} | **Funnel:** ${brief.funnel_stage||''} | **EVI:** ${brief.evi_score ?? ''}\n\n## Hook\n${brief.hook||''}\n\n## Objective\n${brief.objective||''}\n\n## Target Audience\n${brief.target_audience||''}\n\n## Core Message\n${brief.core_message||''}\n\n## Script / Copy\n${brief.script_copy||''}\n\n## Visual Direction\n${brief.visual_direction||''}\n\n## Audio Direction\n${brief.audio_direction||''}\n\n## Technical Specs\n${brief.technical_specs||''}\n\n## CTA\n${brief.cta_block||''}\n\n## Compliance\n${brief.compliance||''}\n`;
+}
 
 function requireExportData(){
   const {posts, calendar} = getExportPosts();
@@ -2249,111 +2472,183 @@ function exportFilename(calendar, posts, ext){
 }
 
 function buildCSVContent(posts){
-  const header = EXPORT_COLS.map(c=>c.label).join(',');
-  const rows = posts.map(p=>EXPORT_COLS.map(c=>{
-    let v = p[c.key];
+  const rows = enrichPostsForExport(posts);
+  const header = REPORT_EXPORT_COLS.map(c=>c.label).join(',');
+  const body = rows.map(p=>REPORT_EXPORT_COLS.map(c=>{
+    let v = exportCellValue(p, c);
     if(typeof v === 'number') v = String(v);
-    v = String(v||'').replace(/"/g,'""').replace(/\r?\n/g,' ');
+    v = String(v||'').replace(/"/g,'""');
     return `"${v}"`;
   }).join(','));
-  return '\ufeff' + [header, ...rows].join('\n');
+  return '\ufeff' + [header, ...body].join('\n');
+}
+
+function mdColumnWidth(col){
+  const px = {
+    date: 96, day: 72, platform: 100, funnel_stage: 78, hook_headline: 340, format: 110, intent: 140,
+    evi_score: 56, cta: 220, hook_type: 120, brief_script_copy: 420,
+  };
+  return px[col.key] || 150;
+}
+
+function mdEscapeHtml(s){
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function mdHookHeadlineHtml(row){
+  const h = row.export_hook ?? '';
+  const c = row.export_caption ?? '';
+  if(!h && !c) return '';
+  if(h && c) return `<strong>${mdEscapeHtml(h)}</strong><br/>${mdEscapeHtml(c).replace(/\r?\n/g,'<br/>')}`;
+  if(h) return `<strong>${mdEscapeHtml(h)}</strong>`;
+  return mdEscapeHtml(c).replace(/\r?\n/g,'<br/>');
+}
+
+function mdExportCellHtml(row, col){
+  if(col.key === 'hook_headline') return mdHookHeadlineHtml(row);
+  const v = exportCellValue(row, col);
+  const s = v == null ? '' : (typeof v === 'number' ? String(v) : String(v));
+  return mdEscapeHtml(s).replace(/\r?\n/g,'<br/>');
 }
 
 function buildMarkdownContent(posts, calendar){
-  const cols=['Date','Day','Platform','Funnel','Intent','Hook Type','Content ID','Format','Hook','Caption','CTA','EVI','Sentiment','Status'];
-  return `# ${calendar.title}\n\n_${posts.length} posts · exported ${new Date().toLocaleString()}_\n\n| ${cols.join(' | ')} |\n|${cols.map(_=>'---').join('|')}|\n${posts.map(p=>`| ${[p.date,p.day,p.platform,p.funnel_stage,p.intent,p.hook_type,p.content_id,p.format,(p.hook||'').replace(/\|/g,'\\|'),(p.caption_preview||'').replace(/\|/g,'\\|').replace(/\n/g,' '),p.cta,p.evi_score,p.sentiment,p.status].join(' | ')} |`).join('\n')}\n`;
+  const rows = enrichPostsForExport(posts);
+  const briefCount = rows.filter(p=>String(p.brief_script_copy||'').trim()).length;
+  const colgroup = REPORT_EXPORT_COLS.map(c=>
+    `<col style="min-width:${mdColumnWidth(c)}px;width:${mdColumnWidth(c)}px"/>`
+  ).join('\n    ');
+  const thead = `<tr>${REPORT_EXPORT_COLS.map(c=>`<th>${mdEscapeHtml(c.label)}</th>`).join('')}</tr>`;
+  const tbody = rows.map(p=>`<tr>${REPORT_EXPORT_COLS.map(c=>`<td>${mdExportCellHtml(p,c)}</td>`).join('')}</tr>`).join('\n    ');
+  return `# ${calendar.title}
+
+_${posts.length} posts · ${briefCount} with brief script · exported ${new Date().toLocaleString()}_
+
+<!-- Same columns as PDF / CSV / XLSX. Scroll horizontally if needed. -->
+
+<div class="export-table-wrap">
+
+<style>
+  .export-table-wrap { overflow-x: auto; max-width: 100%; margin: 1em 0; }
+  .export-table-wrap table { border-collapse: collapse; table-layout: fixed; width: max-content; min-width: 100%; font-size: 13px; line-height: 1.45; }
+  .export-table-wrap th { background: #1f2937; color: #fff; padding: 8px 10px; text-align: left; font-weight: 600; vertical-align: bottom; white-space: normal; }
+  .export-table-wrap td { border: 1px solid #e5e7eb; padding: 8px 10px; vertical-align: top; word-wrap: break-word; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .export-table-wrap tr:nth-child(even) td { background: #f8fafc; }
+  .export-table-wrap td strong { font-weight: 700; color: #111827; }
+</style>
+
+<table>
+  <colgroup>
+    ${colgroup}
+  </colgroup>
+  <thead>
+    ${thead}
+  </thead>
+  <tbody>
+    ${tbody}
+  </tbody>
+</table>
+
+</div>
+`;
 }
 
 function buildXLSXWorkbook(posts, calendar){
-  const data = posts.map(p=>{
-    const row = {};
-    EXPORT_COLS.forEach(c=>{ row[c.label] = p[c.key] ?? ''; });
-    return row;
-  });
+  const rows = enrichPostsForExport(posts);
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(data, {header: EXPORT_COLS.map(c=>c.label)});
-  const widths = EXPORT_COLS.map(c=>{
-    if(c.key==='hook' || c.key==='caption_preview') return {wch:50};
-    if(c.key==='creative_direction' || c.key==='visual_specs') return {wch:42};
-    if(c.key==='tracking_url') return {wch:38};
+  const ws = XLSX.utils.aoa_to_sheet(exportRowsToAoa(rows));
+  const widths = REPORT_EXPORT_COLS.map(c=>{
+    if(c.key==='hook_headline' || c.key==='brief_script_copy') return {wch:55};
+    if(c.key==='cta') return {wch:32};
     if(c.key==='date') return {wch:11};
-    if(c.key==='day' || c.key==='evi_score') return {wch:8};
+    if(c.key==='day' || c.key==='evi_score') return {wch:10};
     return {wch:18};
   });
   ws['!cols'] = widths;
   ws['!freeze'] = {xSplit:0, ySplit:1};
-  const totalEvi = posts.reduce((s,p)=>s+(p.evi_score||0),0);
-  const avgEvi = (totalEvi/posts.length).toFixed(2);
-  const dist = {TOFU:0,MOFU:0,BOFU:0};
-  posts.forEach(p=>{ if(dist[p.funnel_stage]!==undefined) dist[p.funnel_stage]++; });
-  const platCounts = {};
-  posts.forEach(p=>{ platCounts[p.platform] = (platCounts[p.platform]||0)+1; });
-  const summary = [
-    {Metric:'Calendar', Value: calendar.title},
-    {Metric:'Posts exported', Value: posts.length},
-    {Metric:'Date range', Value: `${posts[0]?.date||'-'} to ${posts[posts.length-1]?.date||'-'}`},
-    {Metric:'Average EVI', Value: avgEvi},
-    {Metric:'High-priority (EVI ≥ 7.5)', Value: posts.filter(p=>(p.evi_score||0)>=7.5).length},
-    {Metric:'TOFU posts', Value: dist.TOFU},
-    {Metric:'MOFU posts', Value: dist.MOFU},
-    {Metric:'BOFU posts', Value: dist.BOFU},
-    ...Object.entries(platCounts).map(([k,v])=>({Metric:`Platform: ${k}`, Value:v})),
-    {Metric:'Generated by', Value:'BrandStory Strategy OS'},
-    {Metric:'Exported at', Value: new Date().toLocaleString()},
-  ];
-  const summaryWs = XLSX.utils.json_to_sheet(summary);
-  summaryWs['!cols'] = [{wch:32},{wch:40}];
-  XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
-  XLSX.utils.book_append_sheet(wb, ws, 'Calendar');
+  XLSX.utils.book_append_sheet(wb, ws, 'Posts');
   return wb;
 }
 
 function buildPDFReportHtml(posts, calendar){
+  const rows = enrichPostsForExport(posts);
   const brand = state.brands.find(b=>b.id===calendar.brandId);
-  const totalEvi = posts.reduce((s,p)=>s+(p.evi_score||0),0);
-  const avgEvi = (totalEvi/posts.length).toFixed(2);
+  const totalEvi = rows.reduce((s,p)=>s+(p.evi_score||0),0);
+  const avgEvi = rows.length ? (totalEvi/rows.length).toFixed(2) : '0';
   const dist = {TOFU:0,MOFU:0,BOFU:0};
-  posts.forEach(p=>{ if(dist[p.funnel_stage]!==undefined) dist[p.funnel_stage]++; });
+  rows.forEach(p=>{ if(dist[p.funnel_stage]!==undefined) dist[p.funnel_stage]++; });
   const stageColor = (s)=>({TOFU:'#0891b2',MOFU:'#7c3aed',BOFU:'#ea580c'})[s]||'#6b7280';
   const escHtml = (s)=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+
+  const pdfText = (s)=>escHtml(String(s??'')).replace(/\r?\n/g,'<br/>');
+  const pdfHookCell = (row)=>{
+    const h = row.export_hook ?? '';
+    const c = row.export_caption ?? '';
+    if(!h && !c) return '<span class="muted">—</span>';
+    let html = '';
+    if(h) html += `<strong>${pdfText(h)}</strong>`;
+    if(c) html += `<div class="small">${pdfText(c)}</div>`;
+    return html;
+  };
+  const bodyRows = rows.map(p=>{
+    const ev = p.evi_score||0;
+    const evCls = ev>=7.5?'evi-high':ev>=5.5?'evi-mid':'evi-low';
+    const brief = String(p.brief_script_copy||'').trim();
+    return `<tr>
+      <td>${pdfText(p.date||'')} <div class="small">${pdfText(p.day||'')}</div></td>
+      <td><strong>${pdfText(p.platform||'')}</strong></td>
+      <td><span class="pill" style="background:${stageColor(p.funnel_stage)}">${pdfText(p.funnel_stage||'')}</span></td>
+      <td class="hook-cell">${pdfHookCell(p)}</td>
+      <td>${pdfText(p.format||'')}</td>
+      <td>${pdfText(p.intent||'')}</td>
+      <td class="evi ${evCls}">${ev.toFixed(1)}</td>
+      <td class="wrap-cell">${pdfText(p.cta||'')}</td>
+      <td class="small">${pdfText(p.hook_type||'')}</td>
+      <td class="brief-cell">${brief ? pdfText(brief) : '<span class="muted">—</span>'}</td>
+    </tr>`;
+  }).join('');
+
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
 <title>${escHtml(calendar.title)}</title>
 <style>
-  @page { size: A3 landscape; margin: 14mm; }
+  @page { size: A3 landscape; margin: 12mm; }
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #111827; margin:0; font-size: 10px; line-height: 1.4; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 12px; border-bottom: 2px solid #111827; margin-bottom: 16px; }
-  .title { font-size: 22px; font-weight: 800; margin:0 0 4px; color:#111827; }
+  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #111827; margin: 0; font-size: 9px; line-height: 1.4; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 12px; border-bottom: 2px solid #111827; margin-bottom: 14px; }
+  .title { font-size: 22px; font-weight: 800; margin: 0 0 4px; color: #111827; }
   .subtitle { font-size: 11px; color: #6b7280; }
-  .brand-badge { font-size: 10px; padding: 4px 10px; background:#f3f4f6; border-radius:99px; font-weight:600; color:#374151; }
-  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap:8px; margin-bottom:16px; }
-  .stat { padding: 10px 12px; background:#f9fafb; border-radius:6px; border-left: 3px solid #6366f1; }
-  .stat .l { font-size: 9px; text-transform: uppercase; color:#6b7280; font-weight:600; letter-spacing:.04em; margin-bottom: 2px; }
-  .stat .v { font-size: 16px; font-weight: 700; color:#111827; }
-  table { width:100%; border-collapse: collapse; font-size: 9px; }
-  th { background:#111827; color:white; padding: 7px 6px; text-align:left; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:.03em; }
-  td { padding: 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
-  tr:nth-child(even) td { background:#fafafa; }
-  .pill { display:inline-block; padding:1px 6px; border-radius:99px; font-size:8px; font-weight:600; color:white; }
-  .evi { font-family:'SF Mono',Menlo,monospace; font-weight:700; }
-  .evi-high { color:#059669; } .evi-mid { color:#d97706; } .evi-low { color:#dc2626; }
-  .footer { margin-top: 16px; padding-top: 8px; border-top:1px solid #e5e7eb; font-size:8px; color:#9ca3af; display:flex; justify-content:space-between; }
-  .hook-cell { max-width: 280px; }
-  .small { font-size: 8.5px; color:#6b7280; }
-  @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
+  .brand-badge { font-size: 10px; padding: 4px 10px; background: #f3f4f6; border-radius: 99px; font-weight: 600; color: #374151; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 14px; }
+  .stat { padding: 10px 12px; background: #f9fafb; border-radius: 6px; border-left: 3px solid #6366f1; }
+  .stat .l { font-size: 9px; text-transform: uppercase; color: #6b7280; font-weight: 600; letter-spacing: .04em; margin-bottom: 2px; }
+  .stat .v { font-size: 16px; font-weight: 700; color: #111827; }
+  table { width: 100%; border-collapse: collapse; font-size: 9px; table-layout: fixed; }
+  th { background: #111827; color: white; padding: 7px 6px; text-align: left; font-weight: 600; font-size: 9px; text-transform: uppercase; letter-spacing: .03em; }
+  td { padding: 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; word-wrap: break-word; overflow-wrap: anywhere; white-space: pre-wrap; }
+  tr:nth-child(even) td { background: #fafafa; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 99px; font-size: 8px; font-weight: 600; color: white; white-space: nowrap; }
+  .evi { font-family: 'SF Mono', Menlo, monospace; font-weight: 700; white-space: nowrap; }
+  .evi-high { color: #059669; } .evi-mid { color: #d97706; } .evi-low { color: #dc2626; }
+  .footer { margin-top: 14px; padding-top: 8px; border-top: 1px solid #e5e7eb; font-size: 8px; color: #9ca3af; display: flex; justify-content: space-between; }
+  .hook-cell { width: 20%; }
+  .hook-cell strong { font-weight: 700; color: #111827; }
+  .wrap-cell { width: 11%; }
+  .brief-cell { width: 18%; font-size: 8px; line-height: 1.4; color: #374151; }
+  .small { font-size: 8.5px; color: #6b7280; margin-top: 2px; white-space: pre-wrap; }
+  .muted { color: #9ca3af; }
+  @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } td { page-break-inside: auto; } }
 </style></head>
 <body>
   <div class="header">
     <div>
       <h1 class="title">${escHtml(calendar.title)}</h1>
-      <div class="subtitle">${posts.length} posts · ${escHtml(posts[0]?.date||'')} to ${escHtml(posts[posts.length-1]?.date||'')}${posts.length !== (calendar.posts?.length||0) ? ' · <strong>filtered view</strong>' : ''}</div>
+      <div class="subtitle">${rows.length} posts · ${escHtml(rows[0]?.date||'')} to ${escHtml(rows[rows.length-1]?.date||'')}${rows.length !== (calendar.posts?.length||0) ? ' · filtered view' : ''}</div>
     </div>
     <div class="brand-badge">${escHtml(brand?.name||'Brand')}</div>
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="l">Total Posts</div><div class="v">${posts.length}</div></div>
+    <div class="stat"><div class="l">Total Posts</div><div class="v">${rows.length}</div></div>
     <div class="stat" style="border-color:#0891b2"><div class="l">TOFU</div><div class="v">${dist.TOFU}</div></div>
     <div class="stat" style="border-color:#7c3aed"><div class="l">MOFU</div><div class="v">${dist.MOFU}</div></div>
     <div class="stat" style="border-color:#ea580c"><div class="l">BOFU</div><div class="v">${dist.BOFU}</div></div>
@@ -2365,38 +2660,27 @@ function buildPDFReportHtml(posts, calendar){
       <th style="width:7%">Date</th>
       <th style="width:8%">Platform</th>
       <th style="width:6%">Stage</th>
-      <th style="width:28%">Hook / Headline</th>
-      <th style="width:9%">Format</th>
-      <th style="width:8%">Intent</th>
+      <th style="width:20%">Hook / Headline</th>
+      <th style="width:8%">Format</th>
+      <th style="width:9%">Intent</th>
       <th style="width:5%">EVI</th>
-      <th style="width:18%">CTA</th>
-      <th style="width:11%">Hook Type</th>
+      <th style="width:11%">CTA</th>
+      <th style="width:9%">Hook Type</th>
+      <th style="width:18%">Brief Script / Copy</th>
     </tr></thead>
-    <tbody>
-      ${posts.map(p=>{
-        const ev = p.evi_score||0;
-        const evCls = ev>=7.5?'evi-high':ev>=5.5?'evi-mid':'evi-low';
-        return `<tr>
-          <td>${escHtml(p.date||'')} <div class="small">${escHtml(p.day||'')}</div></td>
-          <td><strong>${escHtml(p.platform||'')}</strong></td>
-          <td><span class="pill" style="background:${stageColor(p.funnel_stage)}">${escHtml(p.funnel_stage||'')}</span></td>
-          <td class="hook-cell"><strong>${escHtml(p.hook||'')}</strong>${p.caption_preview?`<div class="small">${escHtml(truncate(p.caption_preview,140))}</div>`:''}</td>
-          <td>${escHtml(p.format||'')}</td>
-          <td>${escHtml(p.intent||'')}</td>
-          <td class="evi ${evCls}">${ev.toFixed(1)}</td>
-          <td>${escHtml(truncate(p.cta||'',60))}</td>
-          <td class="small">${escHtml(p.hook_type||'')}</td>
-        </tr>`;
-      }).join('')}
-    </tbody>
+    <tbody>${bodyRows}</tbody>
   </table>
 
   <div class="footer">
-    <div>BrandStory Strategy OS · McKinsey Senior Partner Edition</div>
+    <div>BrandStory Strategy OS</div>
     <div>Generated ${new Date().toLocaleString()}</div>
   </div>
 
 </body></html>`;
+}
+
+function exportBriefCount(posts){
+  return posts.filter(p=>getActiveBriefForPost(p)).length;
 }
 
 function exportCSV(){
@@ -2405,7 +2689,8 @@ function exportCSV(){
   const {posts, calendar} = data;
   const filename = exportFilename(calendar, posts, 'csv');
   download(buildCSVContent(posts), filename, 'text/csv;charset=utf-8;');
-  showToast(`Exported ${posts.length} posts as CSV`,'ok');
+  const n = exportBriefCount(posts);
+  showToast(`Exported ${posts.length} posts${n?` (${n} with briefs)`:''} as CSV`,'ok');
 }
 
 function exportXLSX(){
@@ -2415,7 +2700,8 @@ function exportXLSX(){
   const {posts, calendar} = data;
   const wb = buildXLSXWorkbook(posts, calendar);
   XLSX.writeFile(wb, exportFilename(calendar, posts, 'xlsx'));
-  showToast(`Exported ${posts.length} posts as Excel`,'ok');
+  const n = exportBriefCount(posts);
+  showToast(`Exported ${posts.length} posts${n?` (${n} with briefs)`:''} as Excel`,'ok');
 }
 
 function exportPDF(){
@@ -2434,7 +2720,8 @@ function exportPDF(){
   const doPrint = () => setTimeout(() => { try{ win.focus(); win.print(); }catch(e){} }, 250);
   if(win.document.readyState === 'complete') doPrint();
   else win.addEventListener('load', doPrint, { once:true });
-  showToast(`PDF preview opened · use the print dialog to save as PDF`,'ok');
+  const n = exportBriefCount(posts);
+  showToast(`PDF preview opened${n?` (${n} with brief script)`:""} · Landscape · Save as PDF`,'ok');
 }
 
 function exportMarkdown(){
@@ -2442,12 +2729,13 @@ function exportMarkdown(){
   if(!data) return;
   const {posts, calendar} = data;
   download(buildMarkdownContent(posts, calendar), exportFilename(calendar, posts, 'md'), 'text/markdown');
-  showToast(`Exported ${posts.length} posts as Markdown`,'ok');
+  const n = exportBriefCount(posts);
+  showToast(`Exported ${posts.length} posts${n?` (${n} with briefs)`:''} as Markdown`,'ok');
 }
 
 function copyBriefMarkdown(){
-  const b=state.modal.data;
-  const md=`# Creative Brief — ${b.content_id||''}\n\n**Platform:** ${b.platform} | **Format:** ${b.format} | **Funnel:** ${b.funnel_stage} | **EVI:** ${b.evi_score}\n\n## Hook\n${b.hook||''}\n\n## Objective\n${b.objective||''}\n\n## Target Audience\n${b.target_audience||''}\n\n## Core Message\n${b.core_message||''}\n\n## Script / Copy\n${b.script_copy||''}\n\n## Visual Direction\n${b.visual_direction||''}\n\n## Audio Direction\n${b.audio_direction||''}\n\n## Technical Specs\n${b.technical_specs||''}\n\n## CTA\n${b.cta_block||''}\n\n## Compliance\n${b.compliance||''}\n`;
+  const active = getActiveVariant(normalizeBrief(state.modal.data)) || state.modal.data;
+  const md=`# Creative Brief — ${active.content_id||state.modal.data?.content_id||''}\n\n${briefToMarkdown(active)}`;
   navigator.clipboard.writeText(md).then(()=>showToast('Brief copied to clipboard','ok')).catch(()=>showToast('Copy failed','err'));
 }
 

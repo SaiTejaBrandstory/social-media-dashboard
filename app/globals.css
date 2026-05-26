@@ -122,9 +122,14 @@ details summary::-webkit-details-marker{display:none}
 .day-cell{min-height:80px;padding:8px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:11px;display:flex;flex-direction:column;gap:4px;box-shadow:var(--shadow-sm)}
 .day-cell .dnum{font-size:11px;color:var(--ink3);font-weight:600}
 .day-cell .post{padding:4px 6px;border-radius:5px;background:var(--panel2);font-size:10px;line-height:1.3;border-left:3px solid var(--accent)}
+.day-cell .post.post-cal-click{cursor:pointer;transition:background .15s,box-shadow .15s}
+.day-cell .post.post-cal-click:hover{box-shadow:0 0 0 1px rgba(91,84,229,.35);filter:brightness(.97)}
+.day-cell .post.post-cal-click:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .day-cell .post.tofu{border-color:var(--tofu);background:var(--tofu-soft)}
 .day-cell .post.mofu{border-color:var(--mofu);background:var(--mofu-soft)}
 .day-cell .post.bofu{border-color:var(--bofu);background:var(--bofu-soft)}
+tr.post-row-highlight td{background:rgba(124,92,255,.12)!important;transition:background .3s}
+tr.post-row-highlight td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 
 hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 
