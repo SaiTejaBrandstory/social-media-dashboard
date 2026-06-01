@@ -405,7 +405,7 @@ function renderCalendarView(){
         `}
       </div>
       <div class="col-span-12 lg:col-span-9">
-        ${active?renderCalendarDetail(active,brand):`
+        ${active?renderCalendarDetailMain(active,brand):`
           <div class="panel empty">
             <div class="text-[14px] font-semibold mb-1 text-[var(--ink)]">Select a calendar</div>
             <div class="text-[12px]">Pick one from the left, or generate a new 30-day plan.</div>
@@ -416,7 +416,7 @@ function renderCalendarView(){
   `;
 }
 
-function renderCalendarDetail(c,brand){
+function renderCalendarDetailMain(c,brand){
   const posts=c.posts||[];
   const dist=funnelDistribution(posts);
   const platDist=platformDistribution(posts);
@@ -427,7 +427,7 @@ function renderCalendarDetail(c,brand){
           <div class="text-[16px] font-semibold mb-1">${esc(c.title)}</div>
           <div class="text-[11.5px] text-[var(--ink3)]">${posts.length} posts · created ${timeAgo(c.createdAt)} · ${esc(brand.name)}</div>
         </div>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2 justify-end">
           <div class="dl-wrap" style="position:relative">
             <button class="btn" data-action="toggle-download-menu">${ICONS.download} Download <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-left:2px"><polyline points="6 9 12 15 18 9"/></svg></button>
             ${state._dlMenuOpen ? `
@@ -481,6 +481,12 @@ function renderCalendarDetail(c,brand){
       ${renderMonthGrid(posts)}
     </div>
 
+    ${renderAllPostsPanel(posts)}
+  `;
+}
+
+function renderAllPostsPanel(posts){
+  return `
     <div class="panel p-0" id="all-posts-panel">
       <div class="flex items-center justify-between p-4 flex-wrap gap-2">
         <div class="flex items-center gap-2">
@@ -488,7 +494,7 @@ function renderCalendarDetail(c,brand){
           ${renderFilterChipCount(posts)}
         </div>
         <div class="flex items-center gap-2">
-          <input class="input" id="posts-search" placeholder="Search hook, CTA, segment…" value="${esc(state._postsFilter?.q||'')}" style="width:240px;padding:6px 11px;font-size:12px"/>
+          <input class="input" id="posts-search" placeholder="Search hook, CTA, segment…" value="${esc(state._postsFilter?.q||'')}" style="width:280px;padding:6px 11px;font-size:12px"/>
           ${(Object.keys(state._postsFilter||{}).some(k=>k!=='q'&&state._postsFilter[k])||state._postsFilter?.q)?`<button class="btn" style="padding:5px 10px;font-size:11.5px" data-action="clear-post-filters">Clear filters</button>`:''}
         </div>
       </div>
@@ -612,7 +618,7 @@ function findBriefForPost(post){
 
 function applyPostFilters(posts){
   const f = state._postsFilter || {};
-  let result = posts.map((p,originalIdx)=>({...p,_idx:originalIdx}));
+  let result = posts.map((p,originalIdx)=>({...p,calendarIdx:originalIdx,_idx:originalIdx}));
   if(f.platform) result = result.filter(p=>p.platform===f.platform);
   if(f.funnel_stage) result = result.filter(p=>p.funnel_stage===f.funnel_stage);
   if(f.format) result = result.filter(p=>p.format===f.format);
@@ -637,7 +643,10 @@ function applyPostFilters(posts){
   const sortDir = f.sortDir || 'asc';
   result.sort((a,b)=>{
     let av = a[sortKey], bv = b[sortKey];
-    if(sortKey === 'evi_score'){ av = av||0; bv = bv||0; }
+    if(sortKey === 'evi_score' || sortKey === 'slno'){
+      const nKey = sortKey === 'slno' ? 'calendarIdx' : 'evi_score';
+      av = a[nKey]||0; bv = b[nKey]||0;
+    }
     else { av = String(av||''); bv = String(bv||''); }
     if(av < bv) return sortDir==='asc' ? -1 : 1;
     if(av > bv) return sortDir==='asc' ? 1 : -1;
@@ -678,55 +687,63 @@ function renderPostsTable(posts){
   };
 
   return `
-    <div class="scroll" style="max-height:640px">
-      <table>
+    <div class="posts-table-wrap scroll">
+      <table class="posts-table">
         <thead>
           <tr>
-            <th>
-              <button class="th-sort" data-post-sort="date">Date ${sortIcon('date')}</button>
+            <th class="col-num">
+              <button type="button" class="th-sort" data-post-sort="slno">Sl. No. ${sortIcon('slno')}</button>
             </th>
-            <th>
-              <button class="th-sort" data-post-sort="platform">Platform ${sortIcon('platform')}</button>
+            <th class="col-date">
+              <button type="button" class="th-sort" data-post-sort="date">Date ${sortIcon('date')}</button>
+            </th>
+            <th class="col-platform">
+              <button type="button" class="th-sort" data-post-sort="platform">Platform ${sortIcon('platform')}</button>
               ${dropdown('platform', platforms, f.platform, 'All')}
             </th>
-            <th>
-              <button class="th-sort" data-post-sort="funnel_stage">Stage ${sortIcon('funnel_stage')}</button>
+            <th class="col-stage">
+              <button type="button" class="th-sort" data-post-sort="funnel_stage">Stage ${sortIcon('funnel_stage')}</button>
               ${dropdown('funnel_stage', stages, f.funnel_stage, 'All')}
             </th>
-            <th>
-              <button class="th-sort" data-post-sort="hook">Hook / Headline ${sortIcon('hook')}</button>
+            <th class="col-hook">
+              <button type="button" class="th-sort" data-post-sort="hook">Hook / Headline ${sortIcon('hook')}</button>
             </th>
-            <th>
-              <button class="th-sort" data-post-sort="format">Format ${sortIcon('format')}</button>
+            <th class="col-format">
+              <button type="button" class="th-sort" data-post-sort="format">Format ${sortIcon('format')}</button>
               ${dropdown('format', formats, f.format, 'All')}
             </th>
-            <th>
-              <button class="th-sort" data-post-sort="intent">Intent ${sortIcon('intent')}</button>
+            <th class="col-intent">
+              <button type="button" class="th-sort" data-post-sort="intent">Intent ${sortIcon('intent')}</button>
               ${dropdown('intent', intents, f.intent, 'All')}
             </th>
-            <th>
-              <button class="th-sort" data-post-sort="evi_score">EVI ${sortIcon('evi_score')}</button>
+            <th class="col-evi">
+              <button type="button" class="th-sort" data-post-sort="evi_score">EVI ${sortIcon('evi_score')}</button>
               ${dropdown('eviRange', eviRanges, f.eviRange, 'All')}
             </th>
-            <th>
-              <button class="th-sort" data-post-sort="cta">CTA ${sortIcon('cta')}</button>
+            <th class="col-cta">
+              <button type="button" class="th-sort" data-post-sort="cta">CTA ${sortIcon('cta')}</button>
             </th>
-            <th style="min-width:130px"></th>
-            <th style="min-width:100px">Brief</th>
+            <th class="col-actions">
+              <div class="text-[10px] uppercase tracking-wider font-semibold mb-1.5" style="line-height:1.3">Generate Brief</div>
+              <button type="button" class="btn primary" data-action="gen-briefs-all" style="padding:5px 10px;font-size:10.5px;white-space:nowrap;width:100%;max-width:160px;justify-content:center">${ICONS.spark} Generate All</button>
+            </th>
+            <th class="col-brief">Brief</th>
           </tr>
         </thead>
         <tbody>
           ${filtered.length ? filtered.map(p=>{
             const brief=getActiveBriefForPost(p);
+            const sl = (p.calendarIdx ?? p._idx ?? 0) + 1;
             return `<tr id="post-row-${p._idx}" data-post-row="${p._idx}">
+            <td class="mono text-[var(--ink3)] text-center">${sl}</td>
             <td class="mono text-[var(--ink2)]">${esc(p.date||'')}</td>
             <td><span class="pill">${esc(p.platform||'')}</span></td>
             <td><span class="pill ${(p.funnel_stage||'').toLowerCase()}">${esc(p.funnel_stage||'')}</span></td>
-            <td class="font-medium cursor-pointer hover:text-[var(--accent)]" style="max-width:280px" data-post-detail="${p._idx}">${esc(truncate(p.hook||'',90))}</td>
+            <td class="font-medium cursor-pointer hover:text-[var(--accent)] col-hook" data-post-detail="${p._idx}">${esc(p.hook||'')}</td>
             <td class="text-[var(--ink2)]">${esc(p.format||'')}</td>
-            <td class="text-[var(--ink2)]">${esc(p.intent||'')}</td>
-            <td><div class="flex items-center gap-2"><span class="mono text-[12px]">${(p.evi_score||0).toFixed(1)}</span><div class="ev-bar w-12"><div class="ev-fill" style="width:${Math.min(100,(p.evi_score||0)*10)}%"></div></div></div></td>
-            <td class="text-[var(--ink2)] text-[11.5px]">${esc(truncate(p.cta||'',24))}</td>
+            <td class="text-[var(--ink2)] col-intent">${esc(p.intent||'')}</td>
+            <td class="col-evi"><div class="flex items-center gap-2"><span class="mono text-[12px]">${(p.evi_score||0).toFixed(1)}</span><div class="ev-bar w-14"><div class="ev-fill" style="width:${Math.min(100,(p.evi_score||0)*10)}%"></div></div></div></td>
+            <td class="text-[var(--ink2)] col-cta">${esc(p.cta||'')}</td>
             <td>
               ${brief
                 ? ''
@@ -738,7 +755,7 @@ function renderPostsTable(posts){
                 : ''}
             </td>
           </tr>`;
-          }).join('') : `<tr><td colspan="10" class="text-center text-[var(--ink3)] py-8 text-[12px]">No posts match the current filters. <button class="text-[var(--accent)] underline ml-2" data-action="clear-post-filters">Clear filters</button></td></tr>`}
+          }).join('') : `<tr><td colspan="11" class="text-center text-[var(--ink3)] py-8 text-[12px]">No posts match the current filters. <button class="text-[var(--accent)] underline ml-2" data-action="clear-post-filters">Clear filters</button></td></tr>`}
         </tbody>
       </table>
     </div>
@@ -804,7 +821,7 @@ function renderBriefsView(){
   if(!all.length){
     return `<div class="panel empty">
       <div class="text-[14px] font-semibold mb-1 text-[var(--ink)]">No briefs yet</div>
-      <div class="text-[12px] mb-4">Generate a calendar, then run <b class="text-[var(--ink2)]">Auto-Brief Top 4</b> on it to populate this library.</div>
+      <div class="text-[12px] mb-4">Generate a calendar, then use <b class="text-[var(--ink2)]">Generate All Briefs</b> (or Auto-Brief Top 4) on it to populate this library.</div>
     </div>`;
   }
   const byBrand={};
@@ -1619,19 +1636,26 @@ function attachHandlers(){
     }, 0);
   }
 
-  // All Posts table — sort header clicks
-  document.querySelectorAll('[data-post-sort]').forEach(el=>el.addEventListener('click',e=>{
-    e.preventDefault();
-    state._postsFilter = state._postsFilter || {};
-    const key = el.dataset.postSort;
-    if(state._postsFilter.sortKey === key){
-      state._postsFilter.sortDir = state._postsFilter.sortDir === 'asc' ? 'desc' : 'asc';
-    } else {
-      state._postsFilter.sortKey = key;
-      state._postsFilter.sortDir = 'asc';
-    }
-    render();
-  }));
+  // All Posts table — sort header clicks (delegated so icon/text clicks work)
+  const postsPanel = document.getElementById('all-posts-panel');
+  if(postsPanel){
+    postsPanel.addEventListener('click', e=>{
+      const btn = e.target.closest('[data-post-sort]');
+      if(!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      state._postsFilter = state._postsFilter || {};
+      const key = btn.getAttribute('data-post-sort');
+      if(!key) return;
+      if(state._postsFilter.sortKey === key){
+        state._postsFilter.sortDir = state._postsFilter.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state._postsFilter.sortKey = key;
+        state._postsFilter.sortDir = 'asc';
+      }
+      render();
+    });
+  }
 
   // All Posts table — dropdown filter changes
   document.querySelectorAll('[data-post-filter]').forEach(el=>el.addEventListener('change',e=>{
@@ -1682,6 +1706,7 @@ async function handleAction(a){
   if(a==='generate-calendar') return openModal({kind:'generate-calendar'});
   if(a==='run-calendar') return runCalendar();
   if(a==='gen-briefs') return runAutoBriefs();
+  if(a==='gen-briefs-all') return runAutoBriefsAll();
   if(a==='brief-from-post') return briefFromCurrentPost();
   if(a==='fetch-trends') return runFetchTrends();
   if(a==='toggle-download-menu'){ state._dlMenuOpen = !state._dlMenuOpen; render(); return; }
@@ -2013,10 +2038,61 @@ async function runAutoBriefs(){
       await addBriefVariantForPost(state.activeBrandId, p, brief, 'generated', { activate: !hadBrief });
       made++;
     }
-    state.briefs=await Store.listBriefs(state.activeBrandId);
-    state.allBriefs=await Store.listAllBriefs();
+    await refreshBriefsState(state.activeBrandId);
     closeModal(); showToast(`${made} briefs generated`,'ok');
+    render();
   }catch(e){ closeModal(); showToast('Brief generation failed: '+e.message,'err'); }
+}
+
+async function runAutoBriefsAll(){
+  if(!state.activeCalendar?.posts?.length){
+    showToast('No calendar posts to brief','err');
+    return;
+  }
+  const posts = state.activeCalendar.posts;
+  const pending = posts.filter(p=>!findBriefForPost(p));
+  if(!pending.length){
+    showToast('Every post already has a brief','ok');
+    return;
+  }
+  const skipped = posts.length - pending.length;
+  const log = [];
+  const setLoading = (body)=>{
+    state.modal = {kind:'loading', title:'Generating all briefs…', body, log:[...log]};
+    render();
+  };
+  setLoading(
+    skipped
+      ? `Building ${pending.length} briefs (${skipped} skipped — already have a brief).`
+      : `Building ${pending.length} production-grade briefs for every post in this calendar.`
+  );
+  let made = 0;
+  try{
+    for(let i = 0; i < pending.length; i++){
+      const p = pending[i];
+      const label = (p.hook || p.content_id || `Post ${i + 1}`).slice(0, 60);
+      log.push(`▸ ${i + 1}/${pending.length} · ${label}`);
+      setLoading(`Brief ${i + 1} of ${pending.length}…`);
+      const brief = await generateBriefForPost(p);
+      await addBriefVariantForPost(state.activeBrandId, p, brief, 'generated', { activate: true });
+      made++;
+      log[log.length - 1] = `✓ ${i + 1}/${pending.length} · ${label}`;
+    }
+    await refreshBriefsState(state.activeBrandId);
+    closeModal();
+    showToast(`${made} brief${made === 1 ? '' : 's'} generated`,'ok');
+    render();
+  }catch(e){
+    await refreshBriefsState(state.activeBrandId);
+    closeModal();
+    showToast(
+      made
+        ? `Stopped after ${made} brief${made === 1 ? '' : 's'}: ${e.message}`
+        : 'Brief generation failed: ' + e.message,
+      'err'
+    );
+    render();
+  }
 }
 
 async function briefFromPost(post, opts={}){
@@ -2384,6 +2460,7 @@ function getExportPosts(){
 
 // Same columns as PDF report (CSV, MD, XLSX, PDF)
 const REPORT_EXPORT_COLS = [
+  {key:'slno', label:'Sl. No.'},
   {key:'date', label:'Date'},
   {key:'day', label:'Day'},
   {key:'platform', label:'Platform'},
@@ -2433,6 +2510,7 @@ function enrichPostsForExport(posts){
   return posts.map(p=>{
     const brief = getActiveBriefForPost(p);
     const row = {...p};
+    row.slno = (p.calendarIdx ?? p._idx ?? 0) + 1;
     const parts = splitHookHeadline(p.hook, p.caption_preview);
     row.export_hook = parts.hook;
     row.export_caption = parts.caption;
@@ -2444,6 +2522,7 @@ function enrichPostsForExport(posts){
 
 function exportCellValue(row, col){
   let v = row[col.key];
+  if(col.key === 'slno') return String(row.slno ?? (row.calendarIdx ?? 0) + 1);
   if(v == null) return '';
   if(col.key === 'evi_score' && typeof v === 'number') return v.toFixed(1);
   if(typeof v === 'number') return v;
@@ -2485,7 +2564,7 @@ function buildCSVContent(posts){
 
 function mdColumnWidth(col){
   const px = {
-    date: 96, day: 72, platform: 100, funnel_stage: 78, hook_headline: 340, format: 110, intent: 140,
+    slno: 52, date: 96, day: 72, platform: 100, funnel_stage: 78, hook_headline: 340, format: 110, intent: 140,
     evi_score: 56, cta: 220, hook_type: 120, brief_script_copy: 420,
   };
   return px[col.key] || 150;
@@ -2506,6 +2585,7 @@ function mdHookHeadlineHtml(row){
 
 function mdExportCellHtml(row, col){
   if(col.key === 'hook_headline') return mdHookHeadlineHtml(row);
+  if(col.key === 'slno') return `<span style="font-family:ui-monospace,monospace">${mdEscapeHtml(exportCellValue(row, col))}</span>`;
   const v = exportCellValue(row, col);
   const s = v == null ? '' : (typeof v === 'number' ? String(v) : String(v));
   return mdEscapeHtml(s).replace(/\r?\n/g,'<br/>');
@@ -2557,6 +2637,7 @@ function buildXLSXWorkbook(posts, calendar){
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(exportRowsToAoa(rows));
   const widths = REPORT_EXPORT_COLS.map(c=>{
+    if(c.key==='slno') return {wch:8};
     if(c.key==='hook_headline' || c.key==='brief_script_copy') return {wch:55};
     if(c.key==='cta') return {wch:32};
     if(c.key==='date') return {wch:11};
@@ -2589,23 +2670,42 @@ function buildPDFReportHtml(posts, calendar){
     if(c) html += `<div class="small">${pdfText(c)}</div>`;
     return html;
   };
-  const bodyRows = rows.map(p=>{
-    const ev = p.evi_score||0;
+  const PDF_COL_WIDTH = {
+    slno:'4%', date:'8%', day:'5%', platform:'9%', funnel_stage:'6%', hook_headline:'16%',
+    format:'7%', intent:'7%', evi_score:'5%', cta:'9%', hook_type:'7%', brief_script_copy:'17%',
+  };
+  const pdfExportCell = (row, col)=>{
+    const ev = row.evi_score||0;
     const evCls = ev>=7.5?'evi-high':ev>=5.5?'evi-mid':'evi-low';
-    const brief = String(p.brief_script_copy||'').trim();
-    return `<tr>
-      <td>${pdfText(p.date||'')} <div class="small">${pdfText(p.day||'')}</div></td>
-      <td><strong>${pdfText(p.platform||'')}</strong></td>
-      <td><span class="pill" style="background:${stageColor(p.funnel_stage)}">${pdfText(p.funnel_stage||'')}</span></td>
-      <td class="hook-cell">${pdfHookCell(p)}</td>
-      <td>${pdfText(p.format||'')}</td>
-      <td>${pdfText(p.intent||'')}</td>
-      <td class="evi ${evCls}">${ev.toFixed(1)}</td>
-      <td class="wrap-cell">${pdfText(p.cta||'')}</td>
-      <td class="small">${pdfText(p.hook_type||'')}</td>
-      <td class="brief-cell">${brief ? pdfText(brief) : '<span class="muted">—</span>'}</td>
-    </tr>`;
-  }).join('');
+    const brief = String(row.brief_script_copy||'').trim();
+    switch(col.key){
+      case 'slno':
+        return `<td class="mono slno-cell">${pdfText(exportCellValue(row, col))}</td>`;
+      case 'date':
+        return `<td class="date-cell">${pdfText(row.date||'')}</td>`;
+      case 'day':
+        return `<td class="day-cell">${pdfText(row.day||'')}</td>`;
+      case 'platform':
+        return `<td class="platform-cell"><strong>${pdfText(row.platform||'')}</strong></td>`;
+      case 'funnel_stage':
+        return `<td><span class="pill" style="background:${stageColor(row.funnel_stage)}">${pdfText(row.funnel_stage||'')}</span></td>`;
+      case 'hook_headline':
+        return `<td class="hook-cell">${pdfHookCell(row)}</td>`;
+      case 'evi_score':
+        return `<td class="evi ${evCls}">${ev.toFixed(1)}</td>`;
+      case 'brief_script_copy':
+        return `<td class="brief-cell">${brief ? pdfText(brief) : '<span class="muted">—</span>'}</td>`;
+      case 'cta':
+        return `<td class="wrap-cell">${pdfText(row.cta||'')}</td>`;
+      case 'hook_type':
+        return `<td class="small">${pdfText(row.hook_type||'')}</td>`;
+      default:
+        return `<td>${pdfText(exportCellValue(row, col))}</td>`;
+    }
+  };
+  const bodyRows = rows.map(p=>
+    `<tr>${REPORT_EXPORT_COLS.map(c=>pdfExportCell(p,c)).join('')}</tr>`
+  ).join('');
 
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
@@ -2623,8 +2723,15 @@ function buildPDFReportHtml(posts, calendar){
   .stat .l { font-size: 9px; text-transform: uppercase; color: #6b7280; font-weight: 600; letter-spacing: .04em; margin-bottom: 2px; }
   .stat .v { font-size: 16px; font-weight: 700; color: #111827; }
   table { width: 100%; border-collapse: collapse; font-size: 9px; table-layout: fixed; }
+  col.slno-col { width: 4%; }
+  col.date-col { width: 8%; }
+  col.day-col { width: 5%; }
+  col.platform-col { width: 9%; }
   th { background: #111827; color: white; padding: 7px 6px; text-align: left; font-weight: 600; font-size: 9px; text-transform: uppercase; letter-spacing: .03em; }
-  td { padding: 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; word-wrap: break-word; overflow-wrap: anywhere; white-space: pre-wrap; }
+  td { padding: 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }
+  td.slno-cell { text-align: center; white-space: nowrap; }
+  td.date-cell, td.day-cell, td.platform-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  td.hook-cell, td.wrap-cell, td.brief-cell { white-space: pre-wrap; overflow-wrap: anywhere; }
   tr:nth-child(even) td { background: #fafafa; }
   .pill { display: inline-block; padding: 1px 6px; border-radius: 99px; font-size: 8px; font-weight: 600; color: white; white-space: nowrap; }
   .evi { font-family: 'SF Mono', Menlo, monospace; font-weight: 700; white-space: nowrap; }
@@ -2656,17 +2763,11 @@ function buildPDFReportHtml(posts, calendar){
   </div>
 
   <table>
+    <colgroup>
+      ${REPORT_EXPORT_COLS.map(c=>`<col class="${c.key.replace(/_/g,'-')}-col" style="width:${PDF_COL_WIDTH[c.key]||'8%'}"/>`).join('')}
+    </colgroup>
     <thead><tr>
-      <th style="width:7%">Date</th>
-      <th style="width:8%">Platform</th>
-      <th style="width:6%">Stage</th>
-      <th style="width:20%">Hook / Headline</th>
-      <th style="width:8%">Format</th>
-      <th style="width:9%">Intent</th>
-      <th style="width:5%">EVI</th>
-      <th style="width:11%">CTA</th>
-      <th style="width:9%">Hook Type</th>
-      <th style="width:18%">Brief Script / Copy</th>
+      ${REPORT_EXPORT_COLS.map(c=>`<th>${escHtml(c.label)}</th>`).join('')}
     </tr></thead>
     <tbody>${bodyRows}</tbody>
   </table>

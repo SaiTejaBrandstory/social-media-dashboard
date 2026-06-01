@@ -131,6 +131,40 @@ details summary::-webkit-details-marker{display:none}
 tr.post-row-highlight td{background:rgba(124,92,255,.12)!important;transition:background .3s}
 tr.post-row-highlight td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 
+/* All Posts table — full width, roomy columns */
+.posts-table-wrap{
+  overflow-x:auto;
+  overflow-y:auto;
+  max-height:min(72vh,900px);
+  border-top:1px solid var(--line);
+  -webkit-overflow-scrolling:touch;
+}
+.posts-table{
+  width:max-content;
+  min-width:100%;
+  table-layout:auto;
+  font-size:13px;
+}
+.posts-table th{padding:14px 18px}
+.posts-table td{padding:14px 18px;line-height:1.5}
+.posts-table .col-num{width:72px;text-align:center;white-space:nowrap}
+.posts-table .col-num .th-sort{justify-content:center;width:100%}
+.posts-table .col-date{min-width:108px;white-space:nowrap}
+.posts-table .col-platform{min-width:120px}
+.posts-table .col-stage{min-width:100px}
+.posts-table .col-hook,
+.posts-table td.col-hook{min-width:320px;max-width:480px;white-space:normal;word-break:break-word}
+.posts-table .col-format{min-width:120px}
+.posts-table .col-intent,
+.posts-table td.col-intent{min-width:160px;max-width:220px;white-space:normal}
+.posts-table .col-evi{min-width:120px;white-space:nowrap}
+.posts-table .col-cta,
+.posts-table td.col-cta{min-width:180px;max-width:280px;white-space:normal;word-break:break-word}
+.posts-table .col-actions{min-width:160px;white-space:normal;vertical-align:top}
+.posts-table .col-actions .btn{width:100%;max-width:160px}
+.posts-table .col-brief{min-width:120px;white-space:nowrap}
+.posts-table .th-filter{max-width:160px;min-width:110px}
+
 hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 
 /* Date input — light theme */
