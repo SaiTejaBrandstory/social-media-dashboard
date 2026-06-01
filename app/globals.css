@@ -120,7 +120,16 @@ details summary::-webkit-details-marker{display:none}
 
 /* Calendar day cells */
 .day-cell{min-height:80px;padding:8px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:11px;display:flex;flex-direction:column;gap:4px;box-shadow:var(--shadow-sm)}
+.day-cell-head{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-bottom:2px}
 .day-cell .dnum{font-size:11px;color:var(--ink3);font-weight:600}
+.day-add-btn{
+  width:22px;height:22px;border-radius:6px;border:1px dashed var(--ink4);
+  background:var(--panel2);color:var(--accent);font-size:15px;font-weight:700;line-height:1;
+  cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;
+  transition:all .15s;padding:0;
+}
+.day-add-btn:hover{background:var(--accent-soft);border-color:var(--accent);border-style:solid}
+.day-add-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .day-cell .post{padding:4px 6px;border-radius:5px;background:var(--panel2);font-size:10px;line-height:1.3;border-left:3px solid var(--accent)}
 .day-cell .post.post-cal-click{cursor:pointer;transition:background .15s,box-shadow .15s}
 .day-cell .post.post-cal-click:hover{box-shadow:0 0 0 1px rgba(91,84,229,.35);filter:brightness(.97)}
@@ -128,6 +137,67 @@ details summary::-webkit-details-marker{display:none}
 .day-cell .post.tofu{border-color:var(--tofu);background:var(--tofu-soft)}
 .day-cell .post.mofu{border-color:var(--mofu);background:var(--mofu-soft)}
 .day-cell .post.bofu{border-color:var(--bofu);background:var(--bofu-soft)}
+.post-cal-row{display:flex;align-items:flex-start;gap:3px;padding-right:2px}
+.post-cal-row .post-cal-body{flex:1;min-width:0;line-height:1.3;font-size:10px}
+.post-del-btn{
+  flex-shrink:0;width:20px;height:20px;padding:0;border:none;border-radius:4px;
+  background:rgba(239,68,68,.12);color:var(--bad);cursor:pointer;display:inline-flex;
+  align-items:center;justify-content:center;transition:background .12s;
+}
+.post-del-btn:hover{background:rgba(239,68,68,.22)}
+.post-del-btn:focus-visible{outline:2px solid var(--bad);outline-offset:1px}
+.post-edit-hook-btn{
+  flex-shrink:0;width:20px;height:20px;border-radius:4px;border:none;background:transparent;
+  color:var(--ink3);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;
+}
+.post-edit-hook-btn:hover{background:var(--panel3);color:var(--accent)}
+.post-edit-hook-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.hook-cell{display:flex;align-items:flex-start;gap:8px}
+.hook-cell-text{flex:1;min-width:0}
+.hook-edit-btn{
+  flex-shrink:0;width:26px;height:26px;border-radius:6px;border:1px solid var(--line);
+  background:#fff;color:var(--ink3);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;
+}
+.hook-edit-btn:hover{background:var(--panel3);border-color:var(--ink4);color:var(--accent)}
+.hook-inline-edit{display:flex;flex-direction:column;gap:8px}
+.hook-inline-input{width:100%;padding:8px 10px;font-size:12.5px}
+.hook-inline-actions{display:flex;gap:6px;flex-wrap:wrap}
+
+/* Post detail modal — inline edit fields inside panel cards */
+.post-detail-inset{
+  width:100%;border:none;background:transparent;padding:0;margin:0;
+  font-size:12.5px;line-height:1.5;color:var(--ink);font-family:inherit;
+  resize:vertical;
+}
+.post-detail-inset:focus{outline:none}
+.panel2 .post-detail-inset{font-size:12px}
+.panel2 .post-detail-inset[data-post-field="hook"]{font-size:15px;font-weight:600}
+textarea.post-detail-inset{min-height:72px}
+
+/* Calendar view — collapsible calendars sidebar */
+.cal-layout{display:flex;align-items:flex-start;gap:16px}
+.cal-sidebar{
+  width:min(100%,280px);flex-shrink:0;overflow:hidden;
+  transition:width .22s ease,margin .22s ease,opacity .22s ease,padding .22s ease,border-width .22s ease;
+}
+.cal-sidebar-list{max-height:calc(100vh - 220px);overflow-y:auto;padding-right:2px}
+.cal-sidebar-toggle{
+  flex-shrink:0;width:28px;height:28px;border-radius:6px;border:1px solid var(--line);
+  background:#fff;color:var(--ink3);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+  transition:background .12s,border-color .12s,color .12s;
+}
+.cal-sidebar-toggle:hover{background:var(--panel3);border-color:var(--ink4);color:var(--ink)}
+.cal-main{flex:1;min-width:0}
+.cal-sidebar-open-btn{display:inline-flex;align-items:center;gap:8px}
+.cal-layout-collapsed .cal-sidebar{
+  width:0;min-width:0;padding:0;margin:0;opacity:0;border-width:0;pointer-events:none;
+}
+@media (max-width:1023px){
+  .cal-layout{flex-direction:column}
+  .cal-layout .cal-sidebar{width:100%;opacity:1;border-width:1px;padding:16px;pointer-events:auto}
+  .cal-layout-collapsed .cal-sidebar{display:none}
+  .cal-layout-collapsed .cal-sidebar-open-btn{display:inline-flex}
+}
 tr.post-row-highlight td{background:rgba(124,92,255,.12)!important;transition:background .3s}
 tr.post-row-highlight td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 

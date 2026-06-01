@@ -381,34 +381,45 @@ function renderCalendarView(){
   if(!brand) return renderSelectBrandHint('Pick a brand to view its content calendars');
   const cals=state.calendars||[];
   const active=state.activeCalendar;
-  return `
-    <div class="grid grid-cols-12 gap-4">
-      <div class="col-span-12 lg:col-span-3 panel p-4 self-start">
-        <div class="flex items-center justify-between mb-3">
-          <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider">Calendars</div>
-          <span class="pill mono">${cals.length}</span>
-        </div>
-        ${cals.length?`<div class="space-y-2">${cals.map(c=>`
+  const sidebarOpen = !state._calSidebarCollapsed;
+  const calList = cals.length ? `<div class="space-y-2 cal-sidebar-list">${cals.map(c=>`
           <div class="panel2 p-3 cursor-pointer ${active&&active.id===c.id?'glow':''}" data-open-cal="${c.id}">
-            <div class="flex items-center justify-between mb-1">
-              <div class="text-[12.5px] font-semibold truncate">${esc(c.title||'Untitled plan')}</div>
-              <button class="btn ghost danger" style="padding:3px 5px" data-delete-cal="${c.id}">${ICONS.trash}</button>
+            <div class="flex items-center justify-between mb-1 gap-1">
+              <div class="text-[12.5px] font-semibold truncate min-w-0">${esc(c.title||'Untitled plan')}</div>
+              <button type="button" class="btn ghost danger shrink-0" style="padding:3px 5px" data-delete-cal="${c.id}">${ICONS.trash}</button>
             </div>
             <div class="text-[10.5px] text-[var(--ink3)]">${c.posts?c.posts.length:0} posts · ${timeAgo(c.createdAt)}</div>
-            <div class="flex gap-1 mt-2">
+            <div class="flex flex-wrap gap-1 mt-2">
               <span class="pill tofu">T ${countByFunnel(c.posts,'TOFU')}</span>
               <span class="pill mofu">M ${countByFunnel(c.posts,'MOFU')}</span>
               <span class="pill bofu">B ${countByFunnel(c.posts,'BOFU')}</span>
             </div>
-          </div>`).join('')}</div>`:`
-          <div class="text-[12px] text-[var(--ink3)]">No calendars yet. Click <b class="text-[var(--ink2)]">Generate Calendar</b> to create the first one.</div>
-        `}
-      </div>
-      <div class="col-span-12 lg:col-span-9">
+          </div>`).join('')}</div>` : `
+          <div class="text-[12px] text-[var(--ink3)]">No calendars yet. Click <b class="text-[var(--ink2)]">Generate Calendar</b> to create the first one.</div>`;
+
+  return `
+    <div class="cal-layout ${sidebarOpen?'':'cal-layout-collapsed'}">
+      <aside class="cal-sidebar panel p-4 self-start" aria-hidden="${sidebarOpen?'false':'true'}">
+        <div class="flex items-center justify-between mb-3 gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            ${ICONS.calendar}
+            <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider">Calendars</div>
+            <span class="pill mono">${cals.length}</span>
+          </div>
+          <button type="button" class="cal-sidebar-toggle" data-action="toggle-cal-sidebar" title="Hide calendars" aria-label="Hide calendars">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+        </div>
+        ${calList}
+      </aside>
+      <div class="cal-main min-w-0">
+        ${!sidebarOpen?`<button type="button" class="btn cal-sidebar-open-btn mb-3" data-action="toggle-cal-sidebar" title="Show calendars">
+          ${ICONS.calendar}<span>Calendars</span><span class="pill mono">${cals.length}</span>
+        </button>`:''}
         ${active?renderCalendarDetailMain(active,brand):`
           <div class="panel empty">
             <div class="text-[14px] font-semibold mb-1 text-[var(--ink)]">Select a calendar</div>
-            <div class="text-[12px]">Pick one from the left, or generate a new 30-day plan.</div>
+            <div class="text-[12px]">Pick one from the list${sidebarOpen?' on the left':''}, or generate a new 30-day plan.</div>
           </div>
         `}
       </div>
@@ -471,14 +482,23 @@ function renderCalendarDetailMain(c,brand){
       </div>
     </div>
 
-    <div class="panel p-4 mb-4">
-      <div class="flex items-center justify-between mb-3">
-        <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider">30-Day View</div>
-        <div class="flex gap-1.5">
-          <span class="pill tofu">TOFU</span><span class="pill mofu">MOFU</span><span class="pill bofu">BOFU</span>
+    <div class="panel p-4 mb-4 ${state._calendarEditMode?'ring-1 ring-[var(--accent-soft2)]':''}" style="${state._calendarEditMode?'background:rgba(124,92,255,.03)':''}">
+      <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="text-[12px] font-semibold text-[var(--ink2)] uppercase tracking-wider">30-Day View</div>
+          ${state._calendarEditMode?`<span class="pill accent">Editing</span>`:''}
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex gap-1.5">
+            <span class="pill tofu">TOFU</span><span class="pill mofu">MOFU</span><span class="pill bofu">BOFU</span>
+          </div>
+          <button type="button" class="btn ${state._calendarEditMode?'primary':''}" data-action="toggle-calendar-edit">
+            ${state._calendarEditMode?ICONS.close+' Done':ICONS.edit+' Edit calendar'}
+          </button>
         </div>
       </div>
-      ${renderMonthGrid(posts)}
+      ${state._calendarEditMode?`<div class="text-[11px] text-[var(--ink3)] mb-2">Use <b class="text-[var(--ink2)]">+</b> to add a post on a day. <b class="text-[var(--ink2)]">×</b> removes a post.</div>`:''}
+      ${renderMonthGrid(c, posts)}
     </div>
 
     ${renderAllPostsPanel(posts)}
@@ -739,7 +759,7 @@ function renderPostsTable(posts){
             <td class="mono text-[var(--ink2)]">${esc(p.date||'')}</td>
             <td><span class="pill">${esc(p.platform||'')}</span></td>
             <td><span class="pill ${(p.funnel_stage||'').toLowerCase()}">${esc(p.funnel_stage||'')}</span></td>
-            <td class="font-medium cursor-pointer hover:text-[var(--accent)] col-hook" data-post-detail="${p._idx}">${esc(p.hook||'')}</td>
+            ${renderHookTableCell(p)}
             <td class="text-[var(--ink2)]">${esc(p.format||'')}</td>
             <td class="text-[var(--ink2)] col-intent">${esc(p.intent||'')}</td>
             <td class="col-evi"><div class="flex items-center gap-2"><span class="mono text-[12px]">${(p.evi_score||0).toFixed(1)}</span><div class="ev-bar w-14"><div class="ev-fill" style="width:${Math.min(100,(p.evi_score||0)*10)}%"></div></div></div></td>
@@ -760,6 +780,28 @@ function renderPostsTable(posts){
       </table>
     </div>
   `;
+}
+
+function renderHookTableCell(p){
+  const editing = state._inlineHookEditIdx === p._idx;
+  if(editing){
+    const draft = state._inlineHookDraft != null ? state._inlineHookDraft : (p.hook || '');
+    return `<td class="col-hook hook-cell-editing">
+      <div class="hook-inline-edit">
+        <input type="text" class="input hook-inline-input" data-inline-hook-input value="${esc(draft)}" placeholder="Hook / headline"/>
+        <div class="hook-inline-actions">
+          <button type="button" class="btn primary" style="padding:4px 10px;font-size:11px" data-action="save-inline-hook" data-post-idx="${p._idx}">Save</button>
+          <button type="button" class="btn" style="padding:4px 10px;font-size:11px" data-action="cancel-inline-hook">Cancel</button>
+        </div>
+      </div>
+    </td>`;
+  }
+  return `<td class="col-hook">
+    <div class="hook-cell">
+      <span class="hook-cell-text font-medium cursor-pointer hover:text-[var(--accent)]" data-post-detail="${p._idx}">${esc(p.hook || '')}</span>
+      <button type="button" class="hook-edit-btn" data-edit-hook="${p._idx}" title="Edit hook" aria-label="Edit hook">${ICONS.edit}</button>
+    </div>
+  </td>`;
 }
 
 function isPostVisibleInTable(postIdx){
@@ -794,25 +836,307 @@ function performScrollToPost(postIdx){
   });
 }
 
-function renderMonthGrid(posts){
-  const byDate={};
-  posts.forEach((p,idx)=>{ const k=p.date||''; (byDate[k]=byDate[k]||[]).push({post:p,idx}); });
-  const dates=Object.keys(byDate).sort();
-  if(!dates.length) return '<div class="empty">No dated posts to render.</div>';
-  let html='<div class="grid grid-cols-7 gap-2">';
-  for(const d of dates){
-    const day=new Date(d);
-    const dayLabel=isNaN(day)?d:day.getDate();
-    const dow=isNaN(day)?'':['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][day.getDay()];
-    html+=`<div class="day-cell"><div class="dnum">${dow} ${dayLabel}</div>`;
-    byDate[d].slice(0,4).forEach(({post:p,idx})=>{
-      html+=`<div class="post post-cal-click ${(p.funnel_stage||'').toLowerCase()}" data-scroll-to-post="${idx}" role="button" tabindex="0" title="View in All Posts table"><b>${esc(p.platform||'')}</b> · ${esc(truncate(p.hook||'',38))}</div>`;
-    });
-    if(byDate[d].length>4) html+=`<div class="text-[10px] text-[var(--ink3)] mt-1">+${byDate[d].length-4} more</div>`;
-    html+='</div>';
+const POST_FIELD_OPTIONS = {
+  platform: ['Instagram','LinkedIn','TikTok','YouTube','Facebook','X','Threads'],
+  format: ['Reel','Carousel','Static','Story','Short','Long-form Video','Thread','Live','Document Post'],
+  funnel_stage: ['TOFU','MOFU','BOFU'],
+  intent: ['Educate','Entertain','Validate','Inspire','Convert'],
+  hook_type: ['Pattern Interrupt','Curiosity Gap','Pain-Agitate-Solve','Data-Driven','Social Proof','Urgency/Scarcity'],
+  sentiment: ['Curious','Authoritative','Playful','Empathetic','Urgent','Inspiring'],
+};
+
+const ADD_POST_REQUIRED_FIELDS = [
+  'platform','format','funnel_stage','intent','hook_type','hook','caption_preview',
+  'cta','sentiment','segment','creative_direction','visual_specs','tracking_url',
+];
+
+function dayNameFromDate(dateStr){
+  const d = new Date(dateStr + 'T12:00:00');
+  if(Number.isNaN(d.getTime())) return '';
+  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+}
+
+function buildCalendarDayRange(calendar){
+  const posts = calendar?.posts || [];
+  let start = calendar?.startDate;
+  let numDays = Number(calendar?.days) || 0;
+  const dated = posts.map(p=>p.date).filter(Boolean).sort();
+  if(!start && dated.length) start = dated[0];
+  if(!numDays){
+    if(start && dated.length){
+      const s = new Date(start + 'T12:00:00');
+      const e = new Date(dated[dated.length - 1] + 'T12:00:00');
+      numDays = Math.max(30, Math.round((e - s) / 86400000) + 1);
+    } else numDays = 30;
   }
-  html+='</div>';
+  if(!start) start = new Date().toISOString().slice(0, 10);
+  const days = [];
+  const startD = new Date(start + 'T12:00:00');
+  for(let i = 0; i < numDays; i++){
+    const d = new Date(startD);
+    d.setDate(d.getDate() + i);
+    const iso = d.toISOString().slice(0, 10);
+    days.push({ date: iso, day: dayNameFromDate(iso) });
+  }
+  return days;
+}
+
+function platformCode(platform){
+  return ({ Instagram:'IG', LinkedIn:'LI', TikTok:'TT', YouTube:'YT', Facebook:'FB', X:'X', Threads:'TH' })[platform] || 'XX';
+}
+
+function generateContentId(date, platform, posts){
+  const d = String(date || '').replace(/-/g, '');
+  const code = platformCode(platform);
+  const sameDay = (posts || []).filter(p=>p.platform === platform && String(p.date || '').slice(0, 10) === String(date).slice(0, 10));
+  return `${d}_${code}_${String(sameDay.length + 1).padStart(2, '0')}`;
+}
+
+function defaultNewPost(date, day){
+  const brand = state.brands.find(b=>b.id === state.activeBrandId);
+  const site = (brand?.website_url || 'example.com').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  return {
+    date,
+    day,
+    platform: '',
+    format: '',
+    funnel_stage: 'TOFU',
+    intent: 'Educate',
+    hook_type: 'Curiosity Gap',
+    hook: '',
+    caption_preview: '',
+    cta: '',
+    evi_score: 7,
+    sentiment: 'Curious',
+    segment: '',
+    creative_direction: '',
+    visual_specs: '',
+    tracking_url: `https://${site}/?utm_source=PLAT&utm_medium=FORMAT&utm_campaign=manual`,
+    status: 'Draft',
+  };
+}
+
+function openAddPostModal(date, day){
+  state._newPost = defaultNewPost(date, day);
+  openModal({ kind:'add-post', data: { date, day } });
+}
+
+function readNewPostFromForm(){
+  const base = state._newPost ? { ...state._newPost } : {};
+  document.querySelectorAll('[data-new-post-field]').forEach(el=>{
+    const k = el.dataset.newPostField;
+    if(!k) return;
+    if(el.type === 'number') base[k] = el.value === '' ? '' : Number(el.value);
+    else base[k] = el.value;
+  });
+  return base;
+}
+
+function validateNewPost(p){
+  for(const k of ADD_POST_REQUIRED_FIELDS){
+    if(!String(p[k] ?? '').trim()) return k;
+  }
+  const ev = Number(p.evi_score);
+  if(p.evi_score === '' || p.evi_score == null || Number.isNaN(ev)) return 'evi_score';
+  if(ev < 0 || ev > 10) return 'evi_score';
+  return null;
+}
+
+function newPostFieldLabel(key){
+  return ({
+    platform:'Platform', format:'Format', funnel_stage:'Funnel stage', intent:'Intent',
+    hook_type:'Hook type', hook:'Hook / headline', caption_preview:'Caption preview', cta:'CTA',
+    sentiment:'Sentiment', segment:'Segment', creative_direction:'Creative direction',
+    visual_specs:'Visual specs', tracking_url:'Tracking URL', evi_score:'EVI score',
+  })[key] || key;
+}
+
+function renderNewPostSelect(field, label, p){
+  const opts = POST_FIELD_OPTIONS[field] || [];
+  const val = p[field] || '';
+  return `<div>
+    <label class="label">${label} *</label>
+    <select class="select" data-new-post-field="${field}" required>
+      <option value="">— Select —</option>
+      ${opts.map(o=>`<option value="${esc(o)}" ${val===o?'selected':''}>${esc(o)}</option>`).join('')}
+    </select>
+  </div>`;
+}
+
+function renderAddPostModal(m){
+  const p = state._newPost || defaultNewPost(m.data?.date, m.data?.day);
+  return `<div class="modal-backdrop" data-close-modal>
+    <div class="panel p-6 w-full max-w-3xl max-h-[92vh] overflow-auto scroll" onclick="event.stopPropagation()">
+      <div class="flex items-start justify-between mb-4 gap-3">
+        <div>
+          <div class="text-[16px] font-semibold">Add post</div>
+          <div class="text-[12px] text-[var(--ink3)] mt-0.5">${esc(m.data?.day||'')} · ${esc(m.data?.date||'')} · All fields required</div>
+        </div>
+        <button type="button" class="btn ghost" data-close-modal>${ICONS.close}</button>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        ${renderNewPostSelect('platform', 'Platform', p)}
+        ${renderNewPostSelect('format', 'Format', p)}
+        ${renderNewPostSelect('funnel_stage', 'Stage', p)}
+        ${renderNewPostSelect('intent', 'Intent', p)}
+        ${renderNewPostSelect('hook_type', 'Hook type', p)}
+        ${renderNewPostSelect('sentiment', 'Sentiment', p)}
+      </div>
+
+      <div class="mb-3">
+        <label class="label">Hook / headline *</label>
+        <input class="input" data-new-post-field="hook" value="${esc(p.hook||'')}" required/>
+      </div>
+      <div class="mb-3">
+        <label class="label">Caption preview *</label>
+        <textarea class="textarea" data-new-post-field="caption_preview" required style="min-height:72px">${esc(p.caption_preview||'')}</textarea>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label class="label">CTA *</label>
+          <input class="input" data-new-post-field="cta" value="${esc(p.cta||'')}" required/>
+        </div>
+        <div>
+          <label class="label">Segment *</label>
+          <input class="input" data-new-post-field="segment" value="${esc(p.segment||'')}" required/>
+        </div>
+        <div>
+          <label class="label">EVI score *</label>
+          <input class="input mono" type="number" step="0.1" min="0" max="10" data-new-post-field="evi_score" value="${p.evi_score ?? 7}" required/>
+        </div>
+        <div>
+          <label class="label">Status</label>
+          <input class="input" data-new-post-field="status" value="${esc(p.status||'Draft')}"/>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Tracking URL *</label>
+          <input class="input" data-new-post-field="tracking_url" value="${esc(p.tracking_url||'')}" required/>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="label">Creative direction *</label>
+        <textarea class="textarea" data-new-post-field="creative_direction" required style="min-height:64px">${esc(p.creative_direction||'')}</textarea>
+      </div>
+      <div class="mb-3">
+        <label class="label">Visual specs *</label>
+        <textarea class="textarea" data-new-post-field="visual_specs" required style="min-height:64px">${esc(p.visual_specs||'')}</textarea>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-4 border-t border-[var(--line)]">
+        <button type="button" class="btn" data-action="cancel-add-post">Cancel</button>
+        <button type="button" class="btn primary" data-action="save-new-post">${ICONS.spark} Save post</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveNewPost(){
+  if(!state.activeCalendar) return;
+  const draft = readNewPostFromForm();
+  draft.date = state._newPost?.date || draft.date;
+  draft.day = state._newPost?.day || dayNameFromDate(draft.date);
+  const missing = validateNewPost(draft);
+  if(missing){
+    showToast(`Please fill in: ${newPostFieldLabel(missing)}`, 'err');
+    return;
+  }
+  const cal = state.activeCalendar;
+  if(!cal.brandId) cal.brandId = state.activeBrandId;
+  const post = {
+    ...draft,
+    evi_score: Number(draft.evi_score),
+    content_id: generateContentId(draft.date, draft.platform, cal.posts || []),
+    savedAt: Date.now(),
+  };
+  cal.posts = cal.posts || [];
+  cal.posts.push(post);
+  cal.posts.sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.platform||'').localeCompare(b.platform||''));
+  const contentId = post.content_id;
+  try{
+    await Store.saveCalendar(cal.brandId || state.activeBrandId, cal);
+    state.calendars = await Store.listCalendars(cal.brandId || state.activeBrandId);
+    state.activeCalendar = state.calendars.find(c=>c.id === cal.id) || cal;
+    state._newPost = null;
+    closeModal();
+    showToast('Post added to calendar', 'ok');
+    const idx = (state.activeCalendar.posts || []).findIndex(p=>p.content_id === contentId);
+    if(idx >= 0) setTimeout(()=>scrollToPostRow(idx), 400);
+  }catch(e){
+    cal.posts = cal.posts.filter(p=>p !== post);
+    showToast('Save failed: ' + e.message, 'err');
+  }
+}
+
+function renderMonthGrid(calendar, posts){
+  const editMode = !!state._calendarEditMode;
+  const days = buildCalendarDayRange(calendar);
+  const byDate = {};
+  (posts || []).forEach((p, idx)=>{
+    const k = (p.date || '').slice(0, 10);
+    if(!k) return;
+    (byDate[k] = byDate[k] || []).push({ post:p, idx });
+  });
+  if(!days.length) return '<div class="empty">No calendar range to display.</div>';
+  let html = '<div class="grid grid-cols-7 gap-2">';
+  for(const slot of days){
+    const d = slot.date;
+    const day = new Date(d + 'T12:00:00');
+    const dayLabel = Number.isNaN(day.getTime()) ? d : day.getDate();
+    const dow = slot.day || dayNameFromDate(d);
+    const items = byDate[d] || [];
+    html += `<div class="day-cell">
+      <div class="day-cell-head">
+        <div class="dnum">${esc(dow)} ${esc(String(dayLabel))}</div>
+        ${editMode?`<button type="button" class="day-add-btn" data-add-post-date="${esc(d)}" title="Add post on ${esc(d)}">+</button>`:''}
+      </div>`;
+    items.slice(0, editMode ? 8 : 4).forEach(({ post:p, idx })=>{
+      const label = `<b>${esc(p.platform||'')}</b> · ${esc(truncate(p.hook||'', editMode ? 28 : 38))}`;
+      if(editMode){
+        html += `<div class="post post-cal-row ${(p.funnel_stage||'').toLowerCase()}">
+          <div class="post-cal-body" title="${esc(p.hook||'')}">${label}</div>
+          <button type="button" class="post-edit-hook-btn" data-edit-hook="${idx}" title="Edit hook">${ICONS.edit}</button>
+          <button type="button" class="post-del-btn" data-delete-post-idx="${idx}" title="Delete post">${ICONS.trash}</button>
+        </div>`;
+      }else{
+        html += `<div class="post post-cal-click ${(p.funnel_stage||'').toLowerCase()}" data-scroll-to-post="${idx}" role="button" tabindex="0" title="View in All Posts table">${label}</div>`;
+      }
+    });
+    const cap = editMode ? 8 : 4;
+    if(items.length > cap) html += `<div class="text-[10px] text-[var(--ink3)] mt-1">+${items.length - cap} more</div>`;
+    html += '</div>';
+  }
+  html += '</div>';
   return html;
+}
+
+async function deleteCalendarPost(postIdx){
+  const cal = state.activeCalendar;
+  if(!cal?.posts || postIdx < 0 || postIdx >= cal.posts.length) return;
+  const post = cal.posts[postIdx];
+  const label = truncate(post.hook || post.platform || 'this post', 80);
+  openModal({
+    kind:'confirm',
+    title:'Delete post?',
+    body:`Remove "${label}" from this calendar? This cannot be undone.`,
+    danger:true,
+    confirmLabel:'Delete',
+    onYes: async ()=>{
+      const contentId = post.content_id;
+      cal.posts.splice(postIdx, 1);
+      if(!cal.brandId) cal.brandId = state.activeBrandId;
+      try{
+        await Store.saveCalendar(cal.brandId, cal);
+        state.calendars = await Store.listCalendars(cal.brandId);
+        state.activeCalendar = state.calendars.find(c=>c.id === cal.id) || cal;
+        closeModal();
+        showToast('Post removed', 'ok');
+        render();
+      }catch(e){
+        showToast('Delete failed: ' + e.message, 'err');
+      }
+    },
+  });
 }
 
 /* ----- BRIEFS LIBRARY ----- */
@@ -1047,6 +1371,7 @@ function renderModal(){
   if(m.kind==='brand-form') return renderBrandFormModal(m);
   if(m.kind==='generate-calendar') return renderGenerateCalendarModal(m);
   if(m.kind==='post-detail') return renderPostDetailModal(m);
+  if(m.kind==='add-post') return renderAddPostModal(m);
   if(m.kind==='view-brief') return renderBriefDetailModal(m);
   if(m.kind==='confirm') return renderConfirmModal(m);
   if(m.kind==='loading') return renderLoadingModal(m);
@@ -1205,13 +1530,78 @@ function renderGenerateCalendarModal(m){
   </div>`;
 }
 
+function postDetailInsetField(field, value, multiline){
+  const v = esc(value || '');
+  if(multiline){
+    return `<textarea class="post-detail-inset" data-post-field="${field}" rows="4">${v}</textarea>`;
+  }
+  return `<input class="post-detail-inset" data-post-field="${field}" value="${v}"/>`;
+}
+
+function postDetailEditCard(label, field, value, opts={}){
+  const { multiline, span2, type, min, max, step } = opts;
+  let control;
+  if(type === 'number'){
+    control = `<input class="post-detail-inset mono" type="number" step="${step||'0.1'}" min="${min??0}" max="${max??10}" data-post-field="${field}" value="${value ?? 0}"/>`;
+  } else if(multiline){
+    control = postDetailInsetField(field, value, true);
+  } else {
+    control = postDetailInsetField(field, value, false);
+  }
+  return `<div class="panel2 p-3 ${span2?'col-span-2':''}">
+    <div class="text-[10.5px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1.5">${label}</div>
+    ${control}
+  </div>`;
+}
+
+function renderPostDetailBody(post, editing, editMode){
+  if(editMode){
+    return `
+        <div class="mb-3">
+          ${postDetailEditCard('Hook / Headline', 'hook', editing.hook, { span2:true })}
+        </div>
+        <div class="mb-4">
+          <div class="text-[10.5px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1.5">Caption</div>
+          <div class="panel2 p-3">${postDetailInsetField('caption_preview', editing.caption_preview, true)}</div>
+        </div>
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          ${postDetailEditCard('Intent', 'intent', editing.intent)}
+          ${postDetailEditCard('Hook Type', 'hook_type', editing.hook_type)}
+          ${postDetailEditCard('Sentiment', 'sentiment', editing.sentiment)}
+          ${postDetailEditCard('Segment', 'segment', editing.segment)}
+          ${postDetailEditCard('CTA', 'cta', editing.cta, { span2:true })}
+          ${postDetailEditCard('Tracking', 'tracking_url', editing.tracking_url, { span2:true })}
+        </div>
+        <div class="mb-3">
+          <div class="text-[10.5px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1.5">Creative Direction</div>
+          <div class="panel2 p-3">${postDetailInsetField('creative_direction', editing.creative_direction, true)}</div>
+        </div>
+        <div class="mb-4">
+          <div class="text-[10.5px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1.5">Visual Specs</div>
+          <div class="panel2 p-3">${postDetailInsetField('visual_specs', editing.visual_specs, true)}</div>
+        </div>
+        <div class="grid grid-cols-2 gap-3 mb-3">
+          ${postDetailEditCard('EVI Score', 'evi_score', editing.evi_score, { type:'number' })}
+          ${postDetailEditCard('Status', 'status', editing.status || 'Draft')}
+        </div>`;
+  }
+  return `
+        <div class="text-[16px] font-semibold mb-3 break-words">${esc(post.hook||'')}</div>
+        ${post.caption_preview?`<div class="panel2 p-3 mb-4 text-[12.5px] leading-relaxed whitespace-pre-wrap">${esc(post.caption_preview)}</div>`:''}
+        <div class="grid grid-cols-2 gap-3 text-[12px] mb-4">
+          ${[
+            ['Intent',post.intent],['Hook Type',post.hook_type],['Sentiment',post.sentiment],['Segment',post.segment],['CTA',post.cta],['Tracking',post.tracking_url],
+          ].map(([k,v])=>v?`<div class="panel2 p-3"><div class="text-[10.5px] uppercase tracking-wider text-[var(--ink3)] font-semibold">${k}</div><div class="text-[12px] mt-0.5 break-words">${esc(v)}</div></div>`:'').join('')}
+        </div>
+        ${post.creative_direction?`<div class="mb-3"><div class="label">Creative Direction</div><div class="panel2 p-3 text-[12px] leading-relaxed whitespace-pre-wrap">${esc(post.creative_direction)}</div></div>`:''}
+        ${post.visual_specs?`<div class="mb-3"><div class="label">Visual Specs</div><div class="panel2 p-3 text-[12px] leading-relaxed whitespace-pre-wrap">${esc(post.visual_specs)}</div></div>`:''}`;
+}
+
 function renderPostDetailModal(m){
   const post=m.data;
   const briefFlow=!!m.briefFlow;
   const editMode = !!state._postEdit;
   const editing = editMode ? state._postEdit : post;
-  const versions = post.versions || [];
-  const showHistory = !!state._postShowHist;
 
   return `<div class="modal-backdrop" data-close-modal>
     <div class="panel p-6 w-full max-w-3xl max-h-[92vh] overflow-auto scroll" onclick="event.stopPropagation()">
@@ -1221,7 +1611,6 @@ function renderPostDetailModal(m){
           <span class="pill">${esc(post.platform||'')}</span>
           <span class="pill">${esc(post.format||'')}</span>
           <span class="pill mono">EVI ${(post.evi_score||0).toFixed(1)}</span>
-          ${versions.length?`<span class="pill accent">v${versions.length+1}</span>`:`<span class="pill">v1</span>`}
         </div>
         <button class="btn ghost" data-close-modal>${ICONS.close}</button>
       </div>
@@ -1229,68 +1618,10 @@ function renderPostDetailModal(m){
 
       ${editMode?`<div class="panel2 p-2.5 mb-4 flex items-center gap-2" style="border-color:rgba(124,92,255,.4);background:rgba(124,92,255,.06)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7c5cff" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-        <div class="text-[12px] text-[var(--ink)] flex-1"><b>Editing post</b> — adjust fields, then Save to commit a new version.</div>
+        <div class="text-[12px] text-[var(--ink)] flex-1"><b>Editing</b> — change any field below, then Save.</div>
       </div>`:''}
 
-      ${editMode?`
-        <div class="mb-4">
-          <label class="label">Hook / Headline</label>
-          <input class="input" data-post-field="hook" value="${esc(editing.hook||'')}"/>
-        </div>
-        <div class="mb-4">
-          <label class="label">Caption Preview</label>
-          <textarea class="textarea" data-post-field="caption_preview">${esc(editing.caption_preview||'')}</textarea>
-        </div>
-        <div class="grid grid-cols-2 gap-3 mb-4">
-          <div><label class="label">Intent</label><input class="input" data-post-field="intent" value="${esc(editing.intent||'')}"/></div>
-          <div><label class="label">Hook Type</label><input class="input" data-post-field="hook_type" value="${esc(editing.hook_type||'')}"/></div>
-          <div><label class="label">Sentiment</label><input class="input" data-post-field="sentiment" value="${esc(editing.sentiment||'')}"/></div>
-          <div><label class="label">Segment</label><input class="input" data-post-field="segment" value="${esc(editing.segment||'')}"/></div>
-          <div class="col-span-2"><label class="label">CTA</label><input class="input" data-post-field="cta" value="${esc(editing.cta||'')}"/></div>
-          <div class="col-span-2"><label class="label">Tracking URL</label><input class="input" data-post-field="tracking_url" value="${esc(editing.tracking_url||'')}"/></div>
-        </div>
-        <div class="mb-3"><label class="label">Creative Direction</label><textarea class="textarea" data-post-field="creative_direction">${esc(editing.creative_direction||'')}</textarea></div>
-        <div class="mb-3"><label class="label">Visual Specs</label><textarea class="textarea" data-post-field="visual_specs">${esc(editing.visual_specs||'')}</textarea></div>
-        <div class="grid grid-cols-2 gap-3 mb-3">
-          <div><label class="label">EVI Score</label><input class="input mono" type="number" step="0.1" min="0" max="10" data-post-field="evi_score" value="${editing.evi_score||0}"/></div>
-          <div><label class="label">Status</label><input class="input" data-post-field="status" value="${esc(editing.status||'Draft')}"/></div>
-        </div>
-      `:`
-        <div class="text-[16px] font-semibold mb-3">${esc(post.hook||'')}</div>
-        ${post.caption_preview?`<div class="panel2 p-3 mb-4 text-[12.5px] leading-relaxed whitespace-pre-wrap">${esc(post.caption_preview)}</div>`:''}
-        <div class="grid grid-cols-2 gap-3 text-[12px] mb-4">
-          ${[
-            ['Intent',post.intent],['Hook Type',post.hook_type],['Sentiment',post.sentiment],['Segment',post.segment],['CTA',post.cta],['Tracking',post.tracking_url],
-          ].map(([k,v])=>v?`<div class="panel2 p-3"><div class="text-[10.5px] uppercase tracking-wider text-[var(--ink3)] font-semibold">${k}</div><div class="text-[12px] mt-0.5 break-words">${esc(v)}</div></div>`:'').join('')}
-        </div>
-        ${post.creative_direction?`<div class="mb-3"><div class="label">Creative Direction</div><div class="panel2 p-3 text-[12px] leading-relaxed whitespace-pre-wrap">${esc(post.creative_direction)}</div></div>`:''}
-        ${post.visual_specs?`<div class="mb-3"><div class="label">Visual Specs</div><div class="panel2 p-3 text-[12px] leading-relaxed whitespace-pre-wrap">${esc(post.visual_specs)}</div></div>`:''}
-      `}
-
-      ${versions.length?`
-        <div class="mt-5 border-t border-[var(--line)] pt-4">
-          <button class="flex items-center gap-2 text-[12px] font-semibold text-[var(--ink2)] hover:text-[var(--ink)]" data-action="toggle-post-history">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${showHistory?'90deg':'0'});transition:transform .15s"><polyline points="9 18 15 12 9 6"/></svg>
-            <span>Version history</span>
-            <span class="pill mono" style="padding:1px 6px">${versions.length}</span>
-          </button>
-          ${showHistory?`<div class="mt-3 space-y-2">${versions.map((v,i)=>{
-            const versionNum = versions.length - i;
-            return `<div class="panel2 p-3">
-              <div class="flex items-center justify-between mb-1.5">
-                <div class="flex items-center gap-2">
-                  <span class="pill mono">v${versionNum}</span>
-                  <span class="text-[11px] text-[var(--ink3)]">${timeAgo(v.savedAt)}</span>
-                  ${v.regenerated?`<span class="pill accent">regenerated</span>`:`<span class="pill">edited</span>`}
-                  <span class="pill mono" style="padding:1px 6px">EVI ${(v.evi_score||0).toFixed(1)}</span>
-                </div>
-                <button class="btn ghost" style="padding:3px 8px;font-size:11px" data-action="restore-post-version" data-version-idx="${i}">Restore</button>
-              </div>
-              <div class="text-[12px] font-medium truncate">${esc(v.hook||'(no hook)')}</div>
-            </div>`;
-          }).join('')}</div>`:''}
-        </div>
-      `:''}
+      ${renderPostDetailBody(post, editing, editMode)}
 
       ${briefFlow&&!editMode?`<div class="panel2 p-3 mb-4 text-[12.5px] text-[var(--ink2)]" style="border-color:rgba(124,92,255,.35);background:rgba(124,92,255,.06)">
         Review this post, then generate a production-grade creative brief. You can edit fields first if needed.
@@ -1302,8 +1633,8 @@ function renderPostDetailModal(m){
         </div>
         <div class="flex gap-2">
           ${editMode?`
-            <button class="btn" data-action="cancel-edit-post">Cancel Edit</button>
-            <button class="btn primary" data-action="save-post-edit">${ICONS.spark} Save</button>
+            <button class="btn" data-action="cancel-edit-post">Cancel</button>
+            <button class="btn primary" data-action="save-post-edit">Save</button>
           `:`
             <button class="btn" data-action="edit-post">${ICONS.edit} Edit</button>
             <button class="btn" data-action="regenerate-post">${ICONS.refresh} Regenerate</button>
@@ -1540,7 +1871,7 @@ function attachHandlers(){
   document.querySelectorAll('[data-edit-brand]').forEach(el=>el.addEventListener('click',e=>{ e.stopPropagation(); const b=state.brands.find(x=>x.id===el.dataset.editBrand); openModal({kind:'brand-form',data:{...b}}); }));
   document.querySelectorAll('[data-delete-brand]').forEach(el=>el.addEventListener('click',e=>{ e.stopPropagation(); const id=el.dataset.deleteBrand; const b=state.brands.find(x=>x.id===id); openModal({kind:'confirm',title:'Delete brand?',body:`This will permanently remove "${b.name}" and all its calendars + briefs.`,danger:true,confirmLabel:'Delete',onYes:async()=>{ await Store.deleteBrand(id); state.brands=await Store.listBrands(); if(state.activeBrandId===id) state.activeBrandId=null; closeModal(); showToast('Brand deleted','ok'); }}); }));
   document.querySelectorAll('[data-open-brand]').forEach(el=>el.addEventListener('click',e=>{ setActiveBrand(el.dataset.openBrand); state.view='calendar'; loadBrandWorkspace(); }));
-  document.querySelectorAll('[data-open-cal]').forEach(el=>el.addEventListener('click',()=>{ const c=state.calendars.find(x=>x.id===el.dataset.openCal); state.activeCalendar=c; render(); }));
+  document.querySelectorAll('[data-open-cal]').forEach(el=>el.addEventListener('click',()=>{ const c=state.calendars.find(x=>x.id===el.dataset.openCal); state.activeCalendar=c; state._calendarEditMode=false; render(); }));
   document.querySelectorAll('[data-delete-cal]').forEach(el=>el.addEventListener('click',e=>{ e.stopPropagation(); const id=el.dataset.deleteCal; openModal({kind:'confirm',title:'Delete calendar?',body:'This calendar and its posts will be removed.',danger:true,confirmLabel:'Delete',onYes:async()=>{ await Store.deleteCalendar(state.activeBrandId,id); state.calendars=await Store.listCalendars(state.activeBrandId); if(state.activeCalendar&&state.activeCalendar.id===id) state.activeCalendar=null; closeModal(); showToast('Calendar deleted','ok'); }}); }));
   document.querySelectorAll('[data-scroll-to-post]').forEach(el=>{
     const go=()=>scrollToPostRow(Number(el.dataset.scrollToPost));
@@ -1549,7 +1880,57 @@ function attachHandlers(){
       if(e.key==='Enter' || e.key===' '){ e.preventDefault(); go(); }
     });
   });
+  document.querySelectorAll('[data-add-post-date]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const date = el.dataset.addPostDate;
+      if(!date) return;
+      openAddPostModal(date, dayNameFromDate(date));
+    });
+  });
+  document.querySelectorAll('[data-delete-post-idx]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      deleteCalendarPost(Number(el.dataset.deletePostIdx));
+    });
+  });
+  document.querySelectorAll('[data-new-post-field]').forEach(el=>{
+    const sync=()=>{
+      if(!state._newPost) return;
+      const k = el.dataset.newPostField;
+      if(!k) return;
+      if(el.type === 'number') state._newPost[k] = el.value === '' ? '' : Number(el.value);
+      else state._newPost[k] = el.value;
+    };
+    el.addEventListener('input', sync);
+    el.addEventListener('change', sync);
+  });
   document.querySelectorAll('[data-post-detail]').forEach(el=>el.addEventListener('click',()=>{ const i=Number(el.dataset.postDetail); openModal({kind:'post-detail',data:state.activeCalendar.posts[i]}); }));
+  document.querySelectorAll('[data-edit-hook]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const idx = Number(el.dataset.editHook);
+      if(el.closest('.post-cal-row')) openPostHookEdit(idx);
+      else startInlineHookEdit(idx);
+    });
+  });
+  document.querySelectorAll('[data-inline-hook-input]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      state._inlineHookDraft = el.value;
+    });
+    el.addEventListener('keydown', e=>{
+      if(e.key === 'Enter'){ e.preventDefault(); handleAction('save-inline-hook'); }
+      if(e.key === 'Escape'){ e.preventDefault(); handleAction('cancel-inline-hook'); }
+    });
+  });
+  if(state._focusPostField){
+    const field = state._focusPostField;
+    state._focusPostField = null;
+    requestAnimationFrame(()=>{
+      const el = document.querySelector(`[data-post-field="${field}"]`);
+      if(el){ el.focus(); if(el.select) el.select(); }
+    });
+  }
   document.querySelectorAll('[data-gen-brief-post]').forEach(el=>el.addEventListener('click',e=>{
     e.stopPropagation();
     const i=Number(el.dataset.genBriefPost);
@@ -1613,13 +1994,6 @@ function attachHandlers(){
       const k = el.dataset.postField;
       state._postEdit[k] = (k==='evi_score') ? Number(el.value) : el.value;
     }
-  }));
-
-  // Version restore handlers
-  document.querySelectorAll('[data-action="restore-post-version"]').forEach(el=>el.addEventListener('click',e=>{
-    e.stopPropagation();
-    const idx=Number(el.dataset.versionIdx);
-    restorePostVersion(idx);
   }));
 
   // Close download dropdown on outside click
@@ -1696,7 +2070,9 @@ function closeModal(){
   state._chanSel=null; state._chanDays=null;
   state._briefEdit=null; state._briefEditVariantId=null;
   state._briefShowRegenerated=false;
-  state._postEdit=null; state._postShowHist=false;
+  state._postEdit=null;
+  state._focusPostField=null;
+  state._newPost=null;
   render();
 }
 
@@ -1738,12 +2114,29 @@ async function handleAction(a){
   if(a==='toggle-regenerated-copies'){ state._briefShowRegenerated = !state._briefShowRegenerated; render(); return; }
 
   // Post edit / save / regenerate
-  if(a==='edit-post'){ state._postEdit = {...state.modal.data}; render(); return; }
+  if(a==='edit-post' || a==='edit-post-hook'){
+    state._postEdit = applyPostUpdate(state.modal.data, {});
+    if(a==='edit-post-hook') state._focusPostField = 'hook';
+    render();
+    return;
+  }
   if(a==='cancel-edit-post'){ state._postEdit = null; render(); return; }
   if(a==='save-post-edit') return savePostEdit();
+  if(a==='save-inline-hook') return saveInlineHook(state._inlineHookEditIdx);
+  if(a==='cancel-inline-hook'){ state._inlineHookEditIdx = null; state._inlineHookDraft = null; render(); return; }
+  if(a==='save-new-post') return saveNewPost();
+  if(a==='cancel-add-post'){ state._newPost = null; closeModal(); return; }
+  if(a==='toggle-calendar-edit'){
+    state._calendarEditMode = !state._calendarEditMode;
+    render();
+    return;
+  }
+  if(a==='toggle-cal-sidebar'){
+    state._calSidebarCollapsed = !state._calSidebarCollapsed;
+    render();
+    return;
+  }
   if(a==='regenerate-post') return regeneratePost();
-  if(a==='toggle-post-history'){ state._postShowHist = !state._postShowHist; render(); return; }
-  if(a==='restore-post-version'){ return; /* handled below */ }
   if(a==='save-partial'){
     const m=state.modal;
     if(!m||!m.calendarData) return;
@@ -2295,6 +2688,84 @@ async function regenerateBrief(){
   }
 }
 
+/* ===== POST HOOK EDIT ===== */
+function startInlineHookEdit(idx){
+  const post = state.activeCalendar?.posts?.[idx];
+  if(!post) return;
+  state._inlineHookEditIdx = idx;
+  state._inlineHookDraft = post.hook || '';
+  render();
+  requestAnimationFrame(()=>{
+    const inp = document.querySelector('[data-inline-hook-input]');
+    if(inp){ inp.focus(); inp.select(); }
+  });
+}
+
+function openPostHookEdit(idx){
+  const post = state.activeCalendar?.posts?.[idx];
+  if(!post) return;
+  state._postEdit = applyPostUpdate(post, {});
+  state._focusPostField = 'hook';
+  openModal({ kind:'post-detail', data: post });
+}
+
+function captionAfterHookChange(oldHook, newHook, caption){
+  const c = String(caption || '').trim();
+  const h = String(oldHook || '').trim();
+  if(!c || c === h) return newHook;
+  const parts = splitHookHeadline(oldHook, caption);
+  if(!parts.caption) return newHook;
+  return `${newHook}\n${parts.caption}`;
+}
+
+function applyPostUpdate(current, patch){
+  const updated = {...current, ...patch, savedAt: Date.now()};
+  delete updated.versions;
+  delete updated.regenerated;
+  return updated;
+}
+
+async function persistPostHookChange(post, newHook){
+  const trimmed = String(newHook ?? '').trim();
+  if(!trimmed){ showToast('Hook cannot be empty','err'); return null; }
+  const cal = state.activeCalendar;
+  if(!cal?.posts || !post) return null;
+  const idx = cal.posts.findIndex(p=>p===post || (p.content_id && post.content_id && p.content_id===post.content_id));
+  if(idx === -1){ showToast('Post not found in calendar','err'); return null; }
+  const current = cal.posts[idx];
+  if((current.hook || '').trim() === trimmed) return current;
+
+  const updated = applyPostUpdate(current, {
+    hook: trimmed,
+    caption_preview: captionAfterHookChange(current.hook, trimmed, current.caption_preview),
+  });
+  cal.posts[idx] = updated;
+  try{
+    await Store.saveCalendar(cal.brandId, cal);
+    state.calendars = await Store.listCalendars(cal.brandId);
+    state.activeCalendar = state.calendars.find(c=>c.id===cal.id) || cal;
+    return updated;
+  }catch(e){
+    showToast('Save failed: '+e.message,'err');
+    console.error(e);
+    return null;
+  }
+}
+
+async function saveInlineHook(postIdx){
+  if(postIdx == null || postIdx < 0) return;
+  const inp = document.querySelector('[data-inline-hook-input]');
+  if(inp) state._inlineHookDraft = inp.value;
+  const post = state.activeCalendar?.posts?.[postIdx];
+  if(!post) return;
+  const updated = await persistPostHookChange(post, state._inlineHookDraft);
+  if(!updated) return;
+  state._inlineHookEditIdx = null;
+  state._inlineHookDraft = null;
+  render();
+  showToast('Hook updated','ok');
+}
+
 /* ===== POST EDIT / SAVE / REGENERATE / RESTORE ===== */
 async function savePostEdit(){
   const current = state.modal.data;
@@ -2303,12 +2774,7 @@ async function savePostEdit(){
   const cal = state.activeCalendar;
   const idx = cal.posts.findIndex(p=>p===current || (p.content_id && p.content_id===current.content_id));
   if(idx === -1){ showToast('Post not found in calendar','err'); return; }
-  const versions = current.versions ? [...current.versions] : [];
-  const snapshot = {...current}; delete snapshot.versions;
-  snapshot.savedAt = current.savedAt || Date.now();
-  snapshot.regenerated = false;
-  versions.unshift(snapshot);
-  const updated = {...current, ...edited, versions, savedAt: Date.now()};
+  const updated = applyPostUpdate(current, edited);
   cal.posts[idx] = updated;
   try{
     await Store.saveCalendar(cal.brandId, cal);
@@ -2317,7 +2783,7 @@ async function savePostEdit(){
     state._postEdit = null;
     state.modal = {kind:'post-detail', data: updated};
     render();
-    showToast('Post saved · v'+(versions.length+1),'ok');
+    showToast('Post saved','ok');
   }catch(e){ showToast('Save failed: '+e.message,'err'); console.error(e); }
 }
 
@@ -2351,14 +2817,7 @@ hook, caption_preview, intent, hook_type, creative_direction, visual_specs, cta,
 
 Be specific, on-brand, production-ready.`;
     const json = await callClaudeJSON(prompt, {max_tokens: 2000});
-    // Snapshot
-    const versions = current.versions ? [...current.versions] : [];
-    const snapshot = {...current}; delete snapshot.versions;
-    snapshot.savedAt = current.savedAt || Date.now();
-    snapshot.regenerated = false;
-    versions.unshift(snapshot);
-    const updated = {
-      ...current,
+    const updated = applyPostUpdate(current, {
       hook: json.hook || current.hook,
       caption_preview: json.caption_preview || current.caption_preview,
       intent: json.intent || current.intent,
@@ -2370,8 +2829,7 @@ Be specific, on-brand, production-ready.`;
       evi_score: typeof json.evi_score === 'number' ? json.evi_score : current.evi_score,
       sentiment: json.sentiment || current.sentiment,
       status: json.status || current.status,
-      versions, savedAt: Date.now(), regenerated: true
-    };
+    });
     const idx = cal.posts.findIndex(p=>p===current || (p.content_id && p.content_id===current.content_id));
     if(idx !== -1) cal.posts[idx] = updated;
     await Store.saveCalendar(cal.brandId, cal);
@@ -2380,35 +2838,12 @@ Be specific, on-brand, production-ready.`;
     closeModal();
     state.modal = {kind:'post-detail', data: updated};
     render();
-    showToast('Post regenerated · v'+(versions.length+1),'ok');
+    showToast('Post regenerated','ok');
   }catch(e){
     closeModal();
     showToast('Regenerate failed: '+e.message,'err');
     console.error(e);
   }
-}
-
-async function restorePostVersion(idx){
-  const current = state.modal.data;
-  if(!current || !current.versions || !current.versions[idx] || !state.activeCalendar) return;
-  const target = current.versions[idx];
-  const cal = state.activeCalendar;
-  const versions = [...current.versions];
-  const snapshot = {...current}; delete snapshot.versions;
-  snapshot.savedAt = current.savedAt || Date.now();
-  versions.unshift(snapshot);
-  versions.splice(idx+1, 1);
-  const restored = {...target, versions, savedAt: Date.now()};
-  const pi = cal.posts.findIndex(p=>p===current || (p.content_id && p.content_id===current.content_id));
-  if(pi !== -1) cal.posts[pi] = restored;
-  try{
-    await Store.saveCalendar(cal.brandId, cal);
-    state.calendars = await Store.listCalendars(cal.brandId);
-    state.activeCalendar = state.calendars.find(c=>c.id===cal.id) || cal;
-    state.modal = {kind:'post-detail', data: restored};
-    render();
-    showToast('Restored to that version','ok');
-  }catch(e){ showToast('Restore failed: '+e.message,'err'); }
 }
 
 function closeModalKeepEdits(keep){ /* placeholder for future side-by-side flows */ }
