@@ -186,11 +186,585 @@ function tolerantJSONParse(txt){
   return aggressiveJSONParse(txt);
 }
 
+/* ========= CONTENT GUARDRAILS (Anti-Repetition System) ========= */
+const GUARDRAIL_HOOK_CATEGORIES = [
+  'Contrarian','Curiosity Gap','Shock Statistic','Story','Prediction','Mistake',
+  'Comparison','Observation','Question','Challenge','Insider Secret','Myth Busting',
+];
+const GUARDRAIL_FRAMEWORKS = [
+  'PAS','AIDA','BAB','Story Arc','Hero Journey','Problem-Solution','Before-After',
+  'Myth-Reality','Lessons Learned','Case Study','Prediction','Checklist',
+  'Contrarian Opinion','Open Loop','Reverse Story',
+];
+const GUARDRAIL_ANGLES = [
+  'Educational','Opinion','Trend','Story','Case Study','Data Driven','Psychology',
+  'Customer POV','Founder POV','Future Prediction','Myth Busting','Competitive',
+];
+const GUARDRAIL_CONTENT_ANGLES = ['Educational','Contrarian','Story','Myth-busting','Behind-the-scenes'];
+const GUARDRAIL_EMOTIONAL_TRIGGERS = ['Curiosity','Aspiration','Fear','Trust','Pride'];
+const GUARDRAIL_AUDIENCE_AWARENESS = ['Unaware','Problem-aware','Solution-aware'];
+const GUARDRAIL_PERSPECTIVES = ['Founder','Customer','Industry Expert','Observer'];
+const GUARDRAIL_BUSINESS_OBJECTIVES = [
+  'Awareness','Consideration','Trust Building','Lead Generation','Conversion','Retention',
+];
+const GUARDRAIL_TONE_MATRIX = [
+  ['Educational','Conversational'],['Authority','Analytical'],['Storytelling','Emotional'],
+  ['Premium','Minimalist'],['Humorous','Insightful'],['Inspirational','Strategic'],
+  ['Documentary','Investigative'],['Founder Voice','Personal'],['Journalistic','Objective'],
+  ['Contrarian','Bold'],
+];
+const GUARDRAIL_BANNED_PHRASES = [
+  'we help businesses grow','unlock your potential','transform your business today',
+  "in today's competitive landscape","whether you're a startup or enterprise",
+  'unlock the power of','game-changing solution','did you know','here are 3 ways',
+  'stop doing this','most businesses','revolutionize your','take your business to the next level',
+  'cutting-edge solution','synergy','leverage your','disrupt the industry',
+];
+const SIMILARITY_THRESHOLD = 0.35;
+
+function normalizeCompareText(s){
+  return String(s||'').toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim();
+}
+function getWordSet(s){
+  return new Set(normalizeCompareText(s).split(' ').filter(w=>w.length>2));
+}
+function jaccardSimilarity(a,b){
+  const setA=getWordSet(a), setB=getWordSet(b);
+  if(!setA.size&&!setB.size) return 0;
+  let inter=0;
+  for(const w of setA) if(setB.has(w)) inter++;
+  const union=setA.size+setB.size-inter;
+  return union?inter/union:0;
+}
+function maxTextSimilarity(text,corpus){
+  if(!text||!corpus?.length) return 0;
+  let max=0;
+  for(const item of corpus){
+    const cmp=typeof item==='string'?item:(item.text||item.hook||item.caption_preview||'');
+    if(!cmp) continue;
+    const sim=jaccardSimilarity(text,cmp);
+    if(sim>max) max=sim;
+  }
+  return max;
+}
+function containsBannedPhrase(text){
+  const n=normalizeCompareText(text);
+  return GUARDRAIL_BANNED_PHRASES.some(p=>n.includes(p));
+}
+function pickRandom(arr,exclude=[]){
+  const pool=arr.filter(x=>!exclude.includes(x));
+  return pool[Math.floor(Math.random()*pool.length)]||arr[0];
+}
+function shuffleArray(arr){
+  const a=[...arr];
+  for(let i=a.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+  return a;
+}
+
+function collectContentHistory(calendars,briefs,currentPosts=[]){
+  const posts=[], hooks=[], scripts=[], metadata=[];
+  const addPost=p=>{
+    if(!p) return;
+    posts.push(p);
+    if(p.hook) hooks.push({text:p.hook, hook_type:p.hook_type||p.hook_category, hook_category:p.hook_category||p.hook_type});
+    if(p.generation_meta) metadata.push(p.generation_meta);
+  };
+  for(const cal of (calendars||[])){
+    for(const p of (cal.posts||[])) addPost(p);
+  }
+  for(const b of (briefs||[])){
+    const nb=normalizeBrief(b);
+    for(const v of (nb.variants||[])){
+      if(v.script_copy) scripts.push({text:v.script_copy, tone_primary:v.tone_primary, tone_secondary:v.tone_secondary});
+      if(v.hook) hooks.push({text:v.hook, hook_type:v.hook_type});
+      if(v.generation_meta) metadata.push(v.generation_meta);
+    }
+    const active=getActiveVariant(nb);
+    if(active?.script_copy&&!scripts.some(s=>s.text===active.script_copy))
+      scripts.push({text:active.script_copy, tone_primary:active.tone_primary, tone_secondary:active.tone_secondary});
+  }
+  for(const p of currentPosts) addPost(p);
+  return {
+    posts: posts.slice(0,50),
+    hooks: hooks.slice(0,100),
+    scripts: scripts.slice(0,20),
+    metadata: metadata.slice(0,100),
+  };
+}
+
+function buildGenerationMeta(post,assignment){
+  return {
+    content_id: post.content_id||'',
+    hook_type: post.hook_type||post.hook_category||'',
+    hook_category: post.hook_category||post.hook_type||'',
+    tone: post.tone_primary?`${post.tone_primary}+${post.tone_secondary}`:'',
+    tone_primary: post.tone_primary||'',
+    tone_secondary: post.tone_secondary||'',
+    framework: post.content_framework||assignment?.framework||'',
+    angle: post.content_angle||post.creative_angle||assignment?.angle||'',
+    creative_angle: post.creative_angle||assignment?.creative_angle||'',
+    emotional_trigger: post.emotional_trigger||assignment?.emotional_trigger||'',
+    objective: post.business_objective||post.objective||assignment?.business_objective||'',
+    cta_type: post.cta_type||'',
+    perspective: post.perspective||assignment?.perspective||'',
+    audience_awareness: post.audience_awareness||assignment?.audience_awareness||'',
+    keywords: (post.hook||'').split(/\s+/).slice(0,6).filter(w=>w.length>3),
+    generated_at: Date.now(),
+  };
+}
+
+function getRecentFrameworkUsage(metadata,limit=20){
+  const counts={};
+  for(const m of (metadata||[]).slice(0,limit)){
+    const fw=m.framework||'';
+    if(fw) counts[fw]=(counts[fw]||0)+1;
+  }
+  return counts;
+}
+function getHookCategoryFrequency(hooks){
+  const counts={};
+  for(const h of (hooks||[])){
+    const cat=h.hook_category||h.hook_type||'Unknown';
+    counts[cat]=(counts[cat]||0)+1;
+  }
+  return counts;
+}
+function getRecentCombos(metadata,limit=20){
+  return new Set((metadata||[]).slice(0,limit).map(m=>
+    `${m.angle||''}|${m.framework||''}|${m.emotional_trigger||''}`
+  ));
+}
+function getRecentToneCombos(scripts,limit=15){
+  return new Set((scripts||[]).slice(0,limit).map(s=>
+    `${s.tone_primary||''}|${s.tone_secondary||''}`
+  ));
+}
+
+function selectVariationPlan(history,count,alreadyGenerated=[]){
+  const meta=[...(alreadyGenerated||[]).map(p=>p.generation_meta).filter(Boolean), ...(history.metadata||[])];
+  const hooks=[...(alreadyGenerated||[]).map(p=>({text:p.hook,hook_type:p.hook_type})), ...(history.hooks||[])];
+  const fwUsage=getRecentFrameworkUsage(meta);
+  const hookFreq=getHookCategoryFrequency(hooks);
+  const totalHooks=Math.max(hooks.length,1);
+  const usedCombos=getRecentCombos(meta);
+  const lastAngle=meta[0]?.angle||'';
+  const assignments=[];
+  const usedInBatch=new Set();
+
+  for(let i=0;i<count;i++){
+    let angle, framework, trigger, hookCat, perspective, awareness, objective, creativeAngle;
+    let attempts=0;
+    do{
+      angle=pickRandom(GUARDRAIL_CONTENT_ANGLES,[lastAngle,...Array.from(usedInBatch).filter(k=>k.startsWith('a:')).map(k=>k.slice(2))]);
+      creativeAngle=pickRandom(GUARDRAIL_ANGLES,[meta[0]?.creative_angle||'']);
+      framework=pickRandom(GUARDRAIL_FRAMEWORKS,Object.entries(fwUsage).filter(([_,c])=>c>=2).map(([k])=>k));
+      trigger=pickRandom(GUARDRAIL_EMOTIONAL_TRIGGERS);
+      const overused=Object.entries(hookFreq).filter(([_,c])=>c/totalHooks>0.15).map(([k])=>k);
+      hookCat=pickRandom(GUARDRAIL_HOOK_CATEGORIES,overused);
+      perspective=pickRandom(GUARDRAIL_PERSPECTIVES);
+      awareness=pickRandom(GUARDRAIL_AUDIENCE_AWARENESS);
+      objective=pickRandom(GUARDRAIL_BUSINESS_OBJECTIVES);
+      attempts++;
+    }while(attempts<40 && (
+      usedCombos.has(`${angle}|${framework}|${trigger}`) ||
+      usedInBatch.has(`a:${angle}`) ||
+      usedInBatch.has(`f:${framework}`) ||
+      usedInBatch.has(`h:${hookCat}`)
+    ));
+    usedInBatch.add(`a:${angle}`); usedInBatch.add(`f:${framework}`); usedInBatch.add(`h:${hookCat}`);
+    assignments.push({angle,creative_angle:creativeAngle,framework,emotional_trigger:trigger,
+      hook_category:hookCat,perspective,audience_awareness:awareness,business_objective:objective});
+  }
+  return assignments;
+}
+
+function selectToneCombo(history){
+  const used=getRecentToneCombos(history.scripts);
+  const shuffled=shuffleArray(GUARDRAIL_TONE_MATRIX);
+  for(const [primary,secondary] of shuffled){
+    const key=`${primary}|${secondary}`;
+    if(!used.has(key)) return {tone_primary:primary,tone_secondary:secondary};
+  }
+  return {tone_primary:pickRandom(GUARDRAIL_TONE_MATRIX.map(t=>t[0])), tone_secondary:pickRandom(GUARDRAIL_TONE_MATRIX.map(t=>t[1]))};
+}
+
+const FORMAT_COPY_MARKERS={
+  carousel:/\b(slide\s*[#\d:]|\bslide\s+\d+|swipe\s+(left|through|to)|carousel|cover\s+slide|slide\s+deck|slides?\s*\d+\s*[-–—]\s*\d+)\b/i,
+  video:/\b(9:16|vertical\s+video|first\s*1\.?5\s*s|b-?roll|shot\s*[#\d]|cut\s+to|on-?screen\s+text|pattern\s+interrupt|hook\s+in\s+first|timestamp\s*0:)/i,
+  thread:/\b(tweet\s*\d|thread\s*\(|^\s*1\/\d+|post\s*1\s*of\s*\d+|🧵)\b/im,
+  staticOnly:/\b(headline\s+on\s+image|single\s+static|one\s+image\s+post)\b/i,
+};
+
+function getFormatCopyMismatchReasons(post){
+  const fmt=String(post.format||'').trim();
+  const text=`${post.hook||''} ${post.caption_preview||''} ${post.creative_direction||''}`;
+  const reasons=[];
+  const carouselLike=fmt==='Carousel'||fmt==='Document Post';
+  const videoLike=fmt==='Reel'||fmt==='Short'||fmt==='Live';
+  const threadLike=fmt==='Thread';
+  const hasCarousel=FORMAT_COPY_MARKERS.carousel.test(text);
+  const hasVideo=FORMAT_COPY_MARKERS.video.test(text);
+  const hasThread=FORMAT_COPY_MARKERS.thread.test(text);
+
+  if(videoLike&&hasCarousel&&!hasVideo)
+    reasons.push(`copy uses slide/carousel language but format is ${fmt} — rewrite as video/reel script`);
+  if(carouselLike&&hasVideo&&!hasCarousel)
+    reasons.push(`copy uses video shot-list language but format is ${fmt} — rewrite as slide-by-slide`);
+  if(threadLike&&hasCarousel&&!hasThread)
+    reasons.push(`copy uses carousel slides but format is ${fmt} — rewrite as numbered thread`);
+  if(threadLike&&hasVideo&&!hasThread&&!carouselLike)
+    reasons.push(`copy uses video language but format is Thread — rewrite as chained posts`);
+  if(fmt==='Static'&&hasCarousel)
+    reasons.push('copy uses multi-slide structure but format is Static — single image/text only');
+  return reasons;
+}
+
+function getFormatCreativePromptRules(format,platform){
+  const guide=FORMAT_COPY_GUIDANCE[format]||'Match the assigned format exactly.';
+  const bans={
+    Reel:'Do NOT write slide 1/slide 2, carousel, or swipe.',
+    Short:'Do NOT write carousel slides or document sections.',
+    Carousel:'Do NOT write video shot timestamps or b-roll lists without slides.',
+    'Document Post':'Use professional slide/section headers, not Reel hooks.',
+    Static:'Do NOT write multi-slide or shot-by-shot video directions.',
+    Thread:'Do NOT write carousel slides — use numbered thread posts.',
+    Live:'Focus on live run-of-show, not static carousel.',
+  };
+  return `Platform: ${platform||'—'} | Format: ${format||'—'}\n${guide}\n${bans[format]||'No other format\'s structure.'}`;
+}
+
+function getBriefScriptGuideForFormat(format,platform,toneCombo){
+  const t=`${toneCombo.tone_primary}+${toneCombo.tone_secondary} tone`;
+  const guides={
+    Reel:`Shot-by-shot vertical video script with timestamps (0:00-0:03 hook, etc.) in ${t}. Include on-screen text + audio notes. NO slide numbers.`,
+    Short:`YouTube Short script under 60s, one idea, ${t}. Fast cuts, loop ending. NO carousel slides.`,
+    Carousel:`Slide-by-slide copy (Slide 1:, Slide 2:, … up to 8 slides) in ${t}. NO video shot lists.`,
+    'Document Post':`LinkedIn document sections (Section 1:, Section 2:, …) in ${t}. Professional, scannable. NO Reel timestamps.`,
+    Static:`Single post: headline on image + body + CTA in ${t}. NO slides or shot lists.`,
+    Story:`Frame-by-frame Story sequence (Frame 1:, Frame 2:, …) in ${t}. Short, urgent. NO carousel deck.`,
+    Thread:`Numbered thread (1/, 2/, … or Post 1:, Post 2:) in ${t}. NO slides or video b-roll.`,
+    Live:`Live run-of-show: opening hook, segments, Q&A, CTA in ${t}. NO carousel.`,
+  };
+  return guides[format]||`Write script_copy for ${platform} ${format} in ${t}. Structure MUST match ${format} only.`;
+}
+
+function validatePostContent(post,history,currentBatch=[]){
+  const reasons=[];
+  const hook=post.hook||'';
+  const caption=post.caption_preview||'';
+  const combined=`${hook} ${caption}`;
+
+  const postCorpus=[...(history.posts||[]).map(p=>p.hook||''), ...(currentBatch||[]).filter(p=>p!==post).map(p=>p.hook||'')];
+  const hookCorpus=[...(history.hooks||[]).map(h=>h.text||''), ...(currentBatch||[]).filter(p=>p!==post).map(p=>p.hook||'')];
+
+  if(maxTextSimilarity(hook,hookCorpus)>SIMILARITY_THRESHOLD) reasons.push('hook too similar to prior hooks');
+  if(maxTextSimilarity(combined,postCorpus)>SIMILARITY_THRESHOLD) reasons.push('content too similar to prior posts');
+  if(containsBannedPhrase(combined)) reasons.push('contains banned generic phrasing');
+  reasons.push(...getFormatCopyMismatchReasons(post));
+
+  const meta=post.generation_meta||{};
+  const recentMeta=[...(currentBatch||[]).map(p=>p.generation_meta).filter(Boolean), ...(history.metadata||[])];
+  const combo=`${meta.angle||post.content_angle||''}|${meta.framework||post.content_framework||''}|${meta.emotional_trigger||post.emotional_trigger||''}`;
+  const recentCombos=getRecentCombos(recentMeta,20);
+  if(combo!=='||' && recentCombos.has(combo)) reasons.push('repeated angle+framework+trigger combo');
+
+  return {valid:!reasons.length, reasons};
+}
+
+function buildAntiRepetitionSection(history,alreadyGenerated,variationPlan,dateSchedule,postSlots){
+  const recentHooks=[...(alreadyGenerated||[]).slice(-15).map(p=>p.hook), ...(history.hooks||[]).slice(0,20).map(h=>h.text)].filter(Boolean);
+  const recentCaptions=[...(alreadyGenerated||[]).slice(-10).map(p=>p.caption_preview), ...(history.posts||[]).slice(0,10).map(p=>p.caption_preview)].filter(Boolean);
+  const hookList=recentHooks.slice(0,30).map((h,i)=>`${i+1}. "${h}"`).join('\n')||'(none yet)';
+  const capList=recentCaptions.slice(0,15).map((c,i)=>`${i+1}. "${String(c).slice(0,80)}"`).join('\n')||'(none yet)';
+
+  const planLines=(variationPlan||[]).map((v,i)=>{
+    const slot=(postSlots||[])[i];
+    const ds=dateSchedule?.[i];
+    const slotPart=slot?` | Platform=${slot.platform} | Format="${slot.format}" [LOCKED]`:'';
+    const datePart=ds?` | Date=${ds.date} (${ds.day}) [use exactly]`:'';
+    return `Post ${i+1}: Angle=${v.angle} | Framework=${v.framework} | Trigger=${v.emotional_trigger} | HookCategory=${v.hook_category} | Perspective=${v.perspective} | Awareness=${v.audience_awareness} | Objective=${v.business_objective} | CreativeAngle=${v.creative_angle}${slotPart}${datePart}`;
+  }).join('\n');
+
+  return `# CONTENT UNIQUENESS GUARDRAILS (MANDATORY)
+
+## Senior Copywriter Persona
+You are a Senior Brand Copywriter with 15+ years at Ogilvy, Wieden+Kennedy, Leo Burnett, and DDB.
+Before writing each post, internally answer: business objective? expected audience action? emotional response? unique perspective?
+Reject generic statements, clichés, motivational fluff, and meaningless buzzwords.
+
+## Anti-Repetition Rules
+- Similarity to prior content must stay BELOW 35%. Do NOT reuse hooks, angles, examples, or phrasing from below.
+- Never use the same Angle + Framework + Emotional Trigger combo from the last 20 outputs.
+- Same framework cannot appear more than 2 times in the last 20 outputs.
+- No hook category may exceed 15% frequency across recent history.
+- Do NOT repeat the same creative angle in consecutive outputs.
+- BANNED openers/patterns: "Did you know", "Here are 3 ways", "Stop doing this", "Most businesses", corporate jargon.
+
+## Already Generated Hooks (DO NOT REPEAT OR PARAPHRASE)
+${hookList}
+
+## Recent Captions (AVOID SAME STRUCTURE/IDEAS)
+${capList}
+
+## Per-Post Variation Assignments (FOLLOW EXACTLY — one row per post in order)
+${planLines||'(assign unique combinations per post yourself)'}
+
+## Human-Like Copy Filter
+Remove: AI transitions, repeated sentence structures, overused CTAs.
+Add: specificity, unexpected observations, concrete examples, human language.
+
+## Business Objective Alignment
+Every post must map to: Awareness | Consideration | Trust Building | Lead Generation | Conversion | Retention.
+Before finalizing each post, confirm: "How does this support the assigned business objective?"
+
+## Creative Director Review (internal — regenerate if any score < 8, total < 42/50)
+Score each post: Originality, Strategic Alignment, Hook Strength, Emotional Impact, Platform Fit (each /10).
+
+Golden rule: Create strategically distinct persuasion — unique angle, fresh hook mechanism, senior copywriter voice — NOT generic social media filler.`;
+}
+
+async function regenerateCalendarPost(post,brand,history,assignment,reasons){
+  const avoidHooks=[...(history.hooks||[]).slice(0,30).map(h=>h.text), post.hook].filter(Boolean).slice(0,20);
+  const prompt=`You are a Senior Brand Copywriter (15+ years, Ogilvy/W+K/Leo Burnett/DDB). Regenerate ONE calendar post that is strategically distinct.
+
+BRAND: ${brand.name} | ${brand.vertical||''} | ${brand.business_model||''}
+BRAND TONE: ${brand.brand_tone||brand.brand_tone_personality||brand.brand_voice||'professional'}
+BRAND PERSONALITY: ${brand.brand_personality||'-'}
+LANGUAGE: ${brand.brand_language||'Global English'} (all copy must match this locale)
+TARGET: ${brand.target_customer_profile||''}
+
+KEEP LOCKED: date=${post.date}, platform=${post.platform}, format=${post.format}, funnel=${post.funnel_stage}, content_id=${post.content_id}
+
+ASSIGNED VARIATION (mandatory):
+- Content Angle: ${assignment?.angle||'Contrarian'}
+- Creative Angle: ${assignment?.creative_angle||'Opinion'}
+- Framework: ${assignment?.framework||'PAS'}
+- Emotional Trigger: ${assignment?.emotional_trigger||'Curiosity'}
+- Hook Category: ${assignment?.hook_category||'Contrarian'}
+- Perspective: ${assignment?.perspective||'Founder'}
+- Audience Awareness: ${assignment?.audience_awareness||'Problem-aware'}
+- Business Objective: ${assignment?.business_objective||'Consideration'}
+
+REJECTION REASONS: ${(reasons||[]).join('; ')||'too similar to prior content'}
+
+# FORMAT & COPY (MANDATORY — do not change format)
+${getFormatCreativePromptRules(post.format,post.platform)}
+
+AVOID THESE HOOKS ENTIRELY:
+${avoidHooks.map((h,i)=>`${i+1}. "${h}"`).join('\n')}
+
+BANNED: generic fluff, clichés, "Did you know", "Here are 3 ways", "Most businesses", "unlock your potential".
+
+Return JSON with EXACT keys:
+hook, caption_preview, intent, hook_type, hook_category, content_angle, creative_angle, content_framework, emotional_trigger, perspective, audience_awareness, business_objective, creative_direction, visual_specs, cta, segment, evi_score, sentiment, status
+
+hook_type and hook_category must match assigned Hook Category.`;
+  const json=await callClaudeJSON(prompt,{max_tokens:2500,temperature:0.75});
+  const merged={...post,...json,
+    hook_type:json.hook_category||json.hook_type||assignment?.hook_category||post.hook_type,
+    hook_category:json.hook_category||json.hook_type||assignment?.hook_category,
+    content_angle:json.content_angle||assignment?.angle,
+    creative_angle:json.creative_angle||assignment?.creative_angle,
+    content_framework:json.content_framework||assignment?.framework,
+    emotional_trigger:json.emotional_trigger||assignment?.emotional_trigger,
+    perspective:json.perspective||assignment?.perspective,
+    audience_awareness:json.audience_awareness||assignment?.audience_awareness,
+    business_objective:json.business_objective||assignment?.business_objective,
+  };
+  merged.platform=post.platform;
+  merged.format=post.format;
+  merged.date=post.date;
+  merged.day=post.day;
+  merged.content_id=post.content_id;
+  merged.generation_meta=buildGenerationMeta(merged,assignment);
+  return merged;
+}
+
+function lockPostSlotFields(post){
+  post.platform=normalizeCalendarPlatform(post.platform);
+  return post;
+}
+
+function resolveChannelFormat(channelFormats,platform){
+  if(!channelFormats) return null;
+  const canon=normalizeCalendarPlatform(platform);
+  return channelFormats[canon]||channelFormats[platform]||null;
+}
+
+/** @deprecated single-format calendars only */
+function lockPostPlatformFormat(post,channelFormats){
+  lockPostSlotFields(post);
+  const fmt=resolveChannelFormat(channelFormats,post.platform);
+  if(fmt&&!post.format) post.format=fmt;
+  return post;
+}
+
+function enforceAllPostFormats(posts){
+  if(!posts?.length) return {posts, mismatches:0};
+  let mismatches=0;
+  for(const p of posts){
+    const before=p.format;
+    lockPostSlotFields(p);
+    if(before&&p.format&&before!==p.format) mismatches++;
+  }
+  return {posts, mismatches};
+}
+
+async function validateAndFixBatchPosts(posts,brand,history,alreadyGenerated,variationPlan,log){
+  const fixed=[];
+  for(let i=0;i<posts.length;i++){
+    let post={...posts[i]};
+    lockPostSlotFields(post);
+    const lockedPlatform=post.platform;
+    const lockedFormat=post.format;
+    const assignment=variationPlan[i]||selectVariationPlan(history,1,alreadyGenerated)[0];
+    post.hook_type=post.hook_category||post.hook_type||assignment.hook_category;
+    post.hook_category=post.hook_category||post.hook_type||assignment.hook_category;
+    post.content_angle=post.content_angle||assignment.angle;
+    post.creative_angle=post.creative_angle||assignment.creative_angle;
+    post.content_framework=post.content_framework||assignment.framework;
+    post.emotional_trigger=post.emotional_trigger||assignment.emotional_trigger;
+    post.perspective=post.perspective||assignment.perspective;
+    post.audience_awareness=post.audience_awareness||assignment.audience_awareness;
+    post.business_objective=post.business_objective||assignment.business_objective;
+    post.generation_meta=buildGenerationMeta(post,assignment);
+
+    let check=validatePostContent(post,history,[...alreadyGenerated,...fixed]);
+    let retries=0;
+    while(!check.valid && retries<2){
+      log.push(`  ↻ Regenerating post ${i+1} (${check.reasons.join(', ')})`);
+      try{
+        post=await regenerateCalendarPost(post,brand,history,assignment,check.reasons);
+        post.platform=lockedPlatform;
+        post.format=lockedFormat;
+        check=validatePostContent(post,history,[...alreadyGenerated,...fixed]);
+      }catch(e){
+        log.push(`  ⚠ Regen failed for post ${i+1}: ${e.message}`);
+        break;
+      }
+      retries++;
+    }
+    post.platform=lockedPlatform;
+    post.format=lockedFormat;
+    fixed.push(post);
+  }
+  return fixed;
+}
+
 /* ========= STATE ========= */
-const state={ view:'brands', brands:[], activeBrandId:null, calendars:[], activeCalendar:null, briefs:[], trends:null, allBriefs:[], loading:false, modal:null, toast:null };
+const state={ view:'brands', brands:[], activeBrandId:null, calendars:[], activeCalendar:null, briefs:[], trends:null, allBriefs:[], loading:false, modal:null, toast:null, _saveBrandInFlight:false };
 
 function setState(p){ Object.assign(state,p); render(); }
-function showToast(msg,kind='ok',durMs){ state.toast={msg,kind}; render(); const dur=durMs||(kind==='err'?7000:3500); setTimeout(()=>{state.toast=null;render()},dur); }
+
+let _renderQueued=false;
+let _modalRenderQueued=false;
+let _renderedView=null;
+let _analyticsKey=null;
+
+function ensureAppChrome(){
+  const root=document.getElementById('app');
+  if(!root) return null;
+  if(!root.querySelector('#app-shell')){
+    root.innerHTML='<div id="app-shell"></div><div id="modal-host"></div>';
+  }
+  return {shell:root.querySelector('#app-shell'), modalHost:root.querySelector('#modal-host')};
+}
+
+function render(opts={}){
+  if(opts.modalOnly){
+    if(_modalRenderQueued) return;
+    _modalRenderQueued=true;
+    requestAnimationFrame(()=>{
+      _modalRenderQueued=false;
+      renderModalImpl();
+    });
+    return;
+  }
+  if(_renderQueued) return;
+  _renderQueued=true;
+  requestAnimationFrame(()=>{
+    _renderQueued=false;
+    renderImpl();
+  });
+}
+
+function renderSync(opts={}){
+  _renderQueued=false;
+  _modalRenderQueued=false;
+  if(opts.modalOnly) renderModalImpl();
+  else renderImpl();
+}
+
+function renderModalImpl(){
+  const chrome=ensureAppChrome();
+  if(!chrome?.modalHost){ renderImpl(); return; }
+  chrome.modalHost.innerHTML=state.modal?renderModal():'';
+  afterRenderModal();
+}
+
+function afterRenderModal(){
+  if(state.modal?.kind==='brand-form') patchBrandSaveButton();
+}
+
+function clearModalState(){
+  state.modal=null;
+  state._saveBrandInFlight=false;
+  state._chanPlan=null;
+  state._chanSel=null;
+  state._chanFormats=null;
+  state._chanDays=null;
+  state._briefEdit=null;
+  state._briefEditVariantId=null;
+  state._briefShowRegenerated=false;
+  state._postEdit=null;
+  state._focusPostField=null;
+  state._newPost=null;
+}
+
+/** Close overlay only (cheap). Use clearModalState()+render() when main content changed. */
+function closeModal(){
+  clearModalState();
+  render({modalOnly:true});
+}
+
+function refreshUI(){
+  clearModalState();
+  render();
+}
+
+function ensureToastHost(){
+  let host=document.getElementById('app-toast-host');
+  if(!host){
+    host=document.createElement('div');
+    host.id='app-toast-host';
+    host.className='pointer-events-none';
+    host.style.cssText='position:fixed;bottom:24px;right:24px;z-index:70';
+    document.body.appendChild(host);
+  }
+  return host;
+}
+
+function paintToast(){
+  const host=ensureToastHost();
+  if(!state.toast){ host.innerHTML=''; return; }
+  const colors={ok:'var(--good)',err:'var(--bad)',info:'var(--accent)'};
+  const border=colors[state.toast.kind]||'var(--line)';
+  const color=colors[state.toast.kind]||'var(--ink)';
+  host.innerHTML=`<div class="panel p-3 px-4 fadein pointer-events-auto" style="border-color:${border}">
+    <div class="text-[12.5px] font-medium" style="color:${color}">${esc(state.toast.msg)}</div>
+  </div>`;
+}
+
+function showToast(msg,kind='ok',durMs){
+  state.toast={msg,kind};
+  paintToast();
+  const dur=durMs||(kind==='err'?7000:3500);
+  clearTimeout(window._toastTimer);
+  window._toastTimer=setTimeout(()=>{ state.toast=null; paintToast(); }, dur);
+}
 
 /* ========= ICONS ========= */
 const ICONS={
@@ -210,28 +784,31 @@ const ICONS={
 };
 
 /* ========= RENDER SHELL ========= */
-function render(){
+function renderImpl(){
+  const chrome=ensureAppChrome();
   const root=document.getElementById('app');
-  // Preserve focus state of inputs that re-render on keystroke (search box)
+  if(!chrome?.shell||!root) return;
+
   const focused = document.activeElement;
   const focusedId = focused?.id;
   const cursorPos = (focusedId === 'posts-search') ? focused.selectionStart : null;
+  const viewChanged = state._renderedView !== state.view;
+  state._renderedView = state.view;
+  const contentAnim = viewChanged ? ' fadein' : '';
 
-  root.innerHTML=`
+  chrome.shell.innerHTML=`
     <div class="flex min-h-screen">
       ${renderSidebar()}
       <main class="flex-1 min-w-0">
         ${renderTopbar()}
-        <div class="p-6 fadein" id="content">${renderView()}</div>
+        <div class="p-6${contentAnim}" id="content">${renderView()}</div>
       </main>
     </div>
-    ${state.modal?renderModal():''}
-    ${state.toast?renderToast():''}
   `;
-  attachHandlers();
-  if(state.view==='analytics') drawAnalytics();
+  chrome.modalHost.innerHTML=state.modal?renderModal():'';
+  afterRender();
+  if(state.view==='analytics') drawAnalyticsOnce();
 
-  // Restore focus on search input
   if(focusedId === 'posts-search'){
     const el = document.getElementById('posts-search');
     if(el){
@@ -300,8 +877,8 @@ function renderTopbar(){
     <div class="flex items-center gap-2">
       ${renderGoogleAuthTopbar()}
       ${state.view==='brands'?`<button class="btn primary" data-action="new-brand">${ICONS.plus} New Brand</button>`:''}
-      ${state.view==='calendar'&&brand?`<button class="btn primary" data-action="generate-calendar">${ICONS.spark} Generate Calendar</button>`:''}
-      ${state.view==='trends'&&brand?`<button class="btn primary" data-action="fetch-trends">${ICONS.refresh} ${state.trends?'Refresh':'Fetch'} Trends</button>`:''}
+      ${state.view==='calendar'&&brand?`<button class="btn primary" data-action="generate-calendar" ${!isBrandProfileComplete(brand)?'disabled title="Complete required brand profile first"':''}>${ICONS.spark} Generate Calendar</button>`:''}
+      ${state.view==='trends'&&brand?`<button class="btn primary" data-action="fetch-trends" ${!isBrandProfileComplete(brand)?'disabled title="Complete required brand profile first"':''}>${ICONS.refresh} ${state.trends?'Refresh':'Fetch'} Trends</button>`:''}
     </div>
   </div>`;
 }
@@ -345,13 +922,15 @@ function renderBrandsView(){
   <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
     ${state.brands.map(b=>{
       const lastUpd=b.updatedAt?timeAgo(b.updatedAt):'—';
+      const incomplete=!isBrandProfileComplete(b);
+      const missingLabels=getBrandMissingRequired(b).map(m=>m.label).join(', ');
       return `
-      <div class="panel p-5 fadein">
+      <div class="panel p-5 fadein${incomplete?' brand-card-incomplete':''}">
         <div class="flex items-start justify-between mb-3">
           <div class="flex items-center gap-3 min-w-0">
-            <div class="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-[15px] shrink-0" style="background:${brandColor(b.name)}">${initials(b.name)}</div>
+            <div class="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-[15px] shrink-0" style="background:${brandColor(b.name)}">${initials(b.name||'?')}</div>
             <div class="min-w-0">
-              <div class="font-semibold text-[14px] truncate">${esc(b.name)}</div>
+              <div class="font-semibold text-[14px] truncate">${esc(b.name||'Unnamed brand')}</div>
               <div class="text-[11.5px] text-[var(--ink3)] truncate">${esc(b.website_url||'no domain')}</div>
             </div>
           </div>
@@ -361,17 +940,28 @@ function renderBrandsView(){
           </div>
         </div>
         <div class="flex flex-wrap gap-1.5 mb-3">
+          ${incomplete?`<span class="pill brand-pill-incomplete">Incomplete profile</span>`:''}
           <span class="pill">${esc(b.business_model||'B2C')}</span>
           <span class="pill">${esc(b.price_sensitivity_tier||'Mid-Market')}</span>
           ${b.vertical?`<span class="pill accent">${esc(b.vertical.length>22?b.vertical.slice(0,22)+'…':b.vertical)}</span>`:''}
         </div>
+        ${incomplete?`<div class="text-[11.5px] text-[var(--bad)] mb-3 leading-relaxed">Missing: ${esc(missingLabels)}</div>`:''}
         <div class="text-[11.5px] text-[var(--ink2)] leading-relaxed mb-4 line-clamp-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(b.target_customer_profile||'No customer profile yet')}</div>
         <div class="flex items-center justify-between">
           <div class="text-[10.5px] text-[var(--ink3)]">Updated ${lastUpd}</div>
-          <button class="btn primary" style="padding:6px 11px;font-size:12px" data-open-brand="${b.id}">Open →</button>
+          <button class="btn ${incomplete?'':'primary'}" style="padding:6px 11px;font-size:12px" data-open-brand="${b.id}">${incomplete?'Complete profile →':'Open →'}</button>
         </div>
       </div>`;
     }).join('')}
+  </div>`;
+}
+
+function renderIncompleteBrandBanner(brand){
+  const missing=getBrandMissingRequired(brand).map(m=>m.label);
+  return `<div class="brand-form-error-banner mb-4" role="alert">
+    <div class="font-semibold mb-1">Brand profile incomplete</div>
+    <div class="font-normal opacity-90">This brand was saved before required fields were enforced. Add: <strong>${esc(missing.join(', '))}</strong> before generating calendars or trends.</div>
+    <button type="button" class="btn mt-3" data-edit-brand="${brand.id}">Complete profile</button>
   </div>`;
 }
 
@@ -379,20 +969,28 @@ function renderBrandsView(){
 function renderCalendarView(){
   const brand=state.brands.find(b=>b.id===state.activeBrandId);
   if(!brand) return renderSelectBrandHint('Pick a brand to view its content calendars');
+  if(!isBrandProfileComplete(brand)){
+    return renderIncompleteBrandBanner(brand)+`
+    <div class="panel empty mt-4">
+      <div class="text-[13px] text-[var(--ink2)]">Existing calendars stay saved, but new generation needs a complete brand profile.</div>
+    </div>`;
+  }
   const cals=state.calendars||[];
   const active=state.activeCalendar;
   const sidebarOpen = !state._calSidebarCollapsed;
   const calList = cals.length ? `<div class="space-y-2 cal-sidebar-list">${cals.map(c=>`
-          <div class="panel2 p-3 cursor-pointer ${active&&active.id===c.id?'glow':''}" data-open-cal="${c.id}">
+          <div class="panel2 p-3 ${active&&active.id===c.id?'glow':''}">
             <div class="flex items-center justify-between mb-1 gap-1">
-              <div class="text-[12.5px] font-semibold truncate min-w-0">${esc(c.title||'Untitled plan')}</div>
-              <button type="button" class="btn ghost danger shrink-0" style="padding:3px 5px" data-delete-cal="${c.id}">${ICONS.trash}</button>
+              <div class="text-[12.5px] font-semibold truncate min-w-0 cursor-pointer" data-open-cal="${c.id}">${esc(c.title||'Untitled plan')}</div>
+              <button type="button" class="btn ghost danger shrink-0" style="padding:3px 5px" data-delete-cal="${c.id}" title="Delete calendar">${ICONS.trash}</button>
             </div>
-            <div class="text-[10.5px] text-[var(--ink3)]">${c.posts?c.posts.length:0} posts · ${timeAgo(c.createdAt)}</div>
-            <div class="flex flex-wrap gap-1 mt-2">
-              <span class="pill tofu">T ${countByFunnel(c.posts,'TOFU')}</span>
-              <span class="pill mofu">M ${countByFunnel(c.posts,'MOFU')}</span>
-              <span class="pill bofu">B ${countByFunnel(c.posts,'BOFU')}</span>
+            <div class="cursor-pointer" data-open-cal="${c.id}">
+              <div class="text-[10.5px] text-[var(--ink3)]">${c.posts?c.posts.length:0} posts · ${timeAgo(c.createdAt)}</div>
+              <div class="flex flex-wrap gap-1 mt-2">
+                <span class="pill tofu">T ${countByFunnel(c.posts,'TOFU')}</span>
+                <span class="pill mofu">M ${countByFunnel(c.posts,'MOFU')}</span>
+                <span class="pill bofu">B ${countByFunnel(c.posts,'BOFU')}</span>
+              </div>
             </div>
           </div>`).join('')}</div>` : `
           <div class="text-[12px] text-[var(--ink3)]">No calendars yet. Click <b class="text-[var(--ink2)]">Generate Calendar</b> to create the first one.</div>`;
@@ -534,6 +1132,7 @@ const BRIEF_CONTENT_KEYS = [
   'hook','objective','target_audience','core_message','script_copy',
   'visual_direction','audio_direction','technical_specs','cta_block','compliance',
   'content_id','platform','format','funnel_stage','evi_score','caption_preview','intent','hook_type','date','cta',
+  'tone_primary','tone_secondary','generation_meta','calendar_id',
 ];
 
 function extractBriefContent(obj){
@@ -615,25 +1214,44 @@ function getActiveBriefForPost(post){
 
 function findBriefForPost(post){
   const briefs=state.briefs||[];
-  if(!post||!briefs.length) return null;
-  let matches = [];
-  if(post.content_id){
-    matches = briefs.filter(b=>b.content_id===post.content_id);
-  }
-  if(!matches.length){
-    matches = briefs.filter(b=>
-      b.platform===post.platform &&
-      b.hook===post.hook &&
-      b.format===post.format &&
-      b.funnel_stage===post.funnel_stage
-    );
-  }
+  if(!post?.content_id||!briefs.length) return null;
+  let matches=briefs.filter(b=>b.content_id===post.content_id);
+  if(post.calendar_id)
+    matches=matches.filter(b=>b.calendar_id===post.calendar_id);
+  const postFormat=String(post.format||'').trim();
+  if(postFormat)
+    matches=matches.filter(b=>!b.format||b.format===postFormat);
   if(!matches.length) return null;
-  const flagged = matches.filter(b=>b.isActive===true);
-  const pool = flagged.length ? flagged : matches;
-  const record = pool.reduce((best, b)=>
-    briefActivityScore(b) > briefActivityScore(best) ? b : best, pool[0]);
+  const flagged=matches.filter(b=>b.isActive===true);
+  const pool=flagged.length?flagged:matches;
+  const record=pool.reduce((best,b)=>briefActivityScore(b)>briefActivityScore(best)?b:best,pool[0]);
   return normalizeBrief(record);
+}
+
+function resolvePostFormatForBrief(post){
+  const plat=normalizeCalendarPlatform(post?.platform);
+  const fromPost=String(post?.format||'').trim();
+  if(fromPost) return {platform:plat,format:fromPost};
+  const cal=state.activeCalendar;
+  const plan=cal?.channelPlan;
+  if(plan){
+    const fmts=plan[plat]||plan[post?.platform];
+    const keys=fmts?Object.keys(fmts).filter(f=>Number(fmts[f])>0):[];
+    if(keys.length===1) return {platform:plat,format:keys[0]};
+  }
+  const fromCal=cal?.channelFormats?.[plat]||cal?.channelFormats?.[post?.platform];
+  if(fromCal) return {platform:plat,format:fromCal};
+  return {platform:plat,format:getDefaultChannelFormat(plat)};
+}
+
+function getBriefFormatMismatchReasons(brief){
+  if(!brief?.format) return [];
+  return getFormatCopyMismatchReasons({
+    format:brief.format,
+    hook:'',
+    caption_preview:'',
+    creative_direction:`${brief.script_copy||''} ${brief.visual_direction||''}`,
+  });
 }
 
 function applyPostFilters(posts){
@@ -841,7 +1459,7 @@ const POST_FIELD_OPTIONS = {
   format: ['Reel','Carousel','Static','Story','Short','Long-form Video','Thread','Live','Document Post'],
   funnel_stage: ['TOFU','MOFU','BOFU'],
   intent: ['Educate','Entertain','Validate','Inspire','Convert'],
-  hook_type: ['Pattern Interrupt','Curiosity Gap','Pain-Agitate-Solve','Data-Driven','Social Proof','Urgency/Scarcity'],
+  hook_type: GUARDRAIL_HOOK_CATEGORIES,
   sentiment: ['Curious','Authoritative','Playful','Empathetic','Urgent','Inspiring'],
 };
 
@@ -854,6 +1472,51 @@ function dayNameFromDate(dateStr){
   const d = new Date(dateStr + 'T12:00:00');
   if(Number.isNaN(d.getTime())) return '';
   return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+}
+
+/** Evenly map postCount slots across numDays (first post → start, last → end of range). */
+function buildEvenDateSchedule(postCount, startISO, numDays){
+  if(!postCount || !numDays || !startISO) return [];
+  const startD=new Date(startISO+'T12:00:00');
+  if(Number.isNaN(startD.getTime())) return [];
+  const schedule=[];
+  for(let i=0;i<postCount;i++){
+    const dayIndex=postCount===1?0:Math.min(numDays-1,Math.floor((i*numDays)/postCount));
+    const d=new Date(startD);
+    d.setDate(d.getDate()+dayIndex);
+    const iso=d.toISOString().slice(0,10);
+    schedule.push({date:iso,day:dayNameFromDate(iso)});
+  }
+  return schedule;
+}
+
+function applyDateScheduleToPosts(posts, schedule, startIndex=0){
+  if(!posts?.length||!schedule?.length) return posts;
+  posts.forEach((p,i)=>{
+    const slot=schedule[startIndex+i];
+    if(!slot) return;
+    p.date=slot.date;
+    p.day=slot.day;
+  });
+  return posts;
+}
+
+function renumberCalendarContentIds(posts){
+  if(!posts?.length) return posts;
+  const calId=posts[0]?.calendar_id||state.activeCalendar?.id||'';
+  const assigned=[];
+  for(const p of posts){
+    p.content_id=generateContentId(p.date,p.platform,assigned,calId||undefined);
+    assigned.push(p);
+  }
+  return posts;
+}
+
+function distributePostsAcrossCalendarDays(posts, startDate, numDays){
+  if(!posts?.length||!numDays) return posts;
+  const schedule=buildEvenDateSchedule(posts.length,startDate,numDays);
+  applyDateScheduleToPosts(posts,schedule,0);
+  return renumberCalendarContentIds(posts);
 }
 
 function buildCalendarDayRange(calendar){
@@ -885,11 +1548,25 @@ function platformCode(platform){
   return ({ Instagram:'IG', LinkedIn:'LI', TikTok:'TT', YouTube:'YT', Facebook:'FB', X:'X', Threads:'TH' })[platform] || 'XX';
 }
 
-function generateContentId(date, platform, posts){
+function generateContentId(date, platform, posts, calendarId){
   const d = String(date || '').replace(/-/g, '');
   const code = platformCode(platform);
-  const sameDay = (posts || []).filter(p=>p.platform === platform && String(p.date || '').slice(0, 10) === String(date).slice(0, 10));
-  return `${d}_${code}_${String(sameDay.length + 1).padStart(2, '0')}`;
+  const calTag=calendarId?String(calendarId).replace(/^cal_/,'').slice(-10):'';
+  const prefix=calTag?`C${calTag}_`:'';
+  const sameDay=(posts||[]).filter(p=>p.platform===platform&&String(p.date||'').slice(0,10)===String(date).slice(0,10));
+  return `${prefix}${d}_${code}_${String(sameDay.length+1).padStart(2,'0')}`;
+}
+
+function stampCalendarOnPosts(posts,calendarId){
+  if(!posts?.length||!calendarId) return posts;
+  const assigned=[];
+  for(const p of posts){
+    p.calendar_id=calendarId;
+    lockPostSlotFields(p);
+    p.content_id=generateContentId(p.date,p.platform,assigned,calendarId);
+    assigned.push(p);
+  }
+  return posts;
 }
 
 function defaultNewPost(date, day){
@@ -902,7 +1579,7 @@ function defaultNewPost(date, day){
     format: '',
     funnel_stage: 'TOFU',
     intent: 'Educate',
-    hook_type: 'Curiosity Gap',
+    hook_type: 'Contrarian',
     hook: '',
     caption_preview: '',
     cta: '',
@@ -1046,7 +1723,7 @@ async function saveNewPost(){
   const post = {
     ...draft,
     evi_score: Number(draft.evi_score),
-    content_id: generateContentId(draft.date, draft.platform, cal.posts || []),
+    content_id: generateContentId(draft.date, draft.platform, cal.posts || [], cal.id),
     savedAt: Date.now(),
   };
   cal.posts = cal.posts || [];
@@ -1058,7 +1735,8 @@ async function saveNewPost(){
     state.calendars = await Store.listCalendars(cal.brandId || state.activeBrandId);
     state.activeCalendar = state.calendars.find(c=>c.id === cal.id) || cal;
     state._newPost = null;
-    closeModal();
+    clearModalState();
+    render();
     showToast('Post added to calendar', 'ok');
     const idx = (state.activeCalendar.posts || []).findIndex(p=>p.content_id === contentId);
     if(idx >= 0) setTimeout(()=>scrollToPostRow(idx), 400);
@@ -1129,9 +1807,9 @@ async function deleteCalendarPost(postIdx){
         await Store.saveCalendar(cal.brandId, cal);
         state.calendars = await Store.listCalendars(cal.brandId);
         state.activeCalendar = state.calendars.find(c=>c.id === cal.id) || cal;
-        closeModal();
-        showToast('Post removed', 'ok');
+        clearModalState();
         render();
+        showToast('Post removed', 'ok');
       }catch(e){
         showToast('Delete failed: ' + e.message, 'err');
       }
@@ -1226,6 +1904,9 @@ function renderBriefsView(){
 function renderTrendsView(){
   const brand=state.brands.find(b=>b.id===state.activeBrandId);
   if(!brand) return renderSelectBrandHint('Select a brand to fetch live industry trends and thought leadership.');
+  if(!isBrandProfileComplete(brand)){
+    return renderIncompleteBrandBanner(brand);
+  }
   const t=state.trends;
   if(!t){
     return `<div class="panel empty">
@@ -1316,6 +1997,15 @@ function renderAnalyticsView(){
   </div>`;
 }
 
+async function drawAnalyticsOnce(){
+  if(state.view!=='analytics') return;
+  const key=`${state.brands.length}:${(state.brands||[]).map(b=>b.id).sort().join(',')}`;
+  const stats=document.getElementById('analytics-stats');
+  if(_analyticsKey===key && stats?.children?.length) return;
+  _analyticsKey=key;
+  await drawAnalytics();
+}
+
 async function drawAnalytics(){
   // gather all calendars across brands
   const all=[];
@@ -1379,55 +2069,479 @@ function renderModal(){
   return '';
 }
 
+const BRAND_LANGUAGE_OPTIONS=[
+  'US English','UK English','Australian English','Canadian English','New Zealand English',
+  'Indian English','Singapore English','South African English','Middle East English','Global English',
+];
+
+function buildBrandContextBlock(brand){
+  if(!brand) return '';
+  const lang=brand.brand_language||'Global English';
+  const tone=brand.brand_tone||brand.brand_tone_personality||brand.brand_voice||'-';
+  const personality=brand.brand_personality||'-';
+  const voiceExtra=brand.brand_voice?`\n- Additional Voice Notes: ${brand.brand_voice}`:'';
+  return `# BRAND PROFILE (from brand setup — every post must reflect this)
+- Brand Name: ${brand.name||'-'}
+- Website: ${brand.website_url||'-'}
+- Vertical / Sub-segment: ${brand.vertical||'-'}
+- Location: ${brand.location||'-'}
+- Business Model: ${brand.business_model||'B2C'}
+- Price Tier: ${brand.price_sensitivity_tier||'Mid-Market'}
+- Purchase Cycle: ${brand.purchase_cycle_length||'-'}
+- Avg Transaction Value: ${brand.avg_transaction_value||'-'}
+- Time Horizon: ${brand.time_horizon||'30'} days
+- Target Customer Profile: ${brand.target_customer_profile||'-'}
+- Growth Objective: ${brand.growth_objective||'-'}
+- Product / Placement Context: ${brand.product_placement_context||'Lead Gen'}
+- Brand Tone: ${tone}
+- Brand Personality: ${personality}
+- Brand Language: ${lang} (MANDATORY — all hooks, captions, and CTAs must use this locale: spelling, idioms, date/number formats, cultural references)${voiceExtra}`;
+}
+
+function renderBrandContextPreview(brand){
+  const rows=[
+    ['Target customer', brand.target_customer_profile],
+    ['Growth objective', brand.growth_objective],
+    ['Vertical', brand.vertical],
+    ['Location', brand.location],
+    ['Business model', brand.business_model],
+    ['Brand tone', brand.brand_tone||brand.brand_tone_personality],
+    ['Brand personality', brand.brand_personality],
+    ['Language', brand.brand_language],
+    ['Voice notes', brand.brand_voice],
+  ].filter(([,v])=>String(v||'').trim());
+  if(!rows.length) return '';
+  return `<div class="panel2 p-3 mb-1">
+    <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-2">Brand profile used for generation</div>
+    <div class="space-y-1.5 text-[11.5px] text-[var(--ink2)] leading-relaxed">
+      ${rows.map(([k,v])=>`<div><span class="text-[var(--ink3)]">${esc(k)}:</span> ${esc(String(v).slice(0,200))}${String(v).length>200?'…':''}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
 function renderBrandFormModal(m){
   const b=m.data||{};
+  const reqLabel=(text)=>`<label class="label">${esc(text)}<span class="req-asterisk" aria-hidden="true">*</span></label>`;
+  const optLabel=(text)=>`<label class="label">${esc(text)}</label>`;
   return `<div class="modal-backdrop" data-close-modal>
     <div class="panel p-6 w-full max-w-3xl max-h-[88vh] overflow-auto" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between mb-5">
         <div>
           <div class="text-[16px] font-semibold">${b.id?'Edit Brand':'New Brand'}</div>
-          <div class="text-[11.5px] text-[var(--ink3)]">All 12 fields feed the McKinsey-grade strategy engine</div>
+          <div class="text-[11.5px] text-[var(--ink3)]">Fields marked with <span class="req-asterisk">*</span> are required${b.id && !isBrandProfileComplete(b)?' — this brand still has missing required fields':''}</div>
         </div>
         <button class="btn ghost" data-close-modal>${ICONS.close}</button>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div><label class="label">Brand Name *</label><input class="input" id="f-name" value="${esc(b.name||'')}" placeholder="Acme Brands"/></div>
-        <div><label class="label">Website URL *</label><input class="input" id="f-website_url" value="${esc(b.website_url||'')}" placeholder="https://acme.com"/></div>
-        <div><label class="label">Vertical / Sub-segment *</label><input class="input" id="f-vertical" value="${esc(b.vertical||'')}" placeholder="D2C protein supplements"/></div>
-        <div><label class="label">Location (Country → City) *</label><input class="input" id="f-location" value="${esc(b.location||'')}" placeholder="India → Bangalore"/></div>
-        <div><label class="label">Business Model *</label><select class="select" id="f-business_model">${['B2B','B2C','B2G','D2C','Marketplace'].map(o=>`<option ${o===(b.business_model||'B2C')?'selected':''}>${o}</option>`).join('')}</select></div>
-        <div><label class="label">Price Tier *</label><select class="select" id="f-price_sensitivity_tier">${['Premium','Mid-Market','Value','Discount'].map(o=>`<option ${o===(b.price_sensitivity_tier||'Mid-Market')?'selected':''}>${o}</option>`).join('')}</select></div>
-        <div><label class="label">Purchase Cycle *</label><input class="input" id="f-purchase_cycle_length" value="${esc(b.purchase_cycle_length||'')}" placeholder="14 days / 3 months"/></div>
-        <div><label class="label">Avg Transaction Value *</label><input class="input" id="f-avg_transaction_value" value="${esc(b.avg_transaction_value||'')}" placeholder="₹1,800 AOV"/></div>
-        <div><label class="label">Time Horizon *</label><select class="select" id="f-time_horizon">${['30','60','90','180','365'].map(o=>`<option value="${o}" ${o===String(b.time_horizon||'30')?'selected':''}>${o} days</option>`).join('')}</select></div>
-        <div class="md:col-span-2"><label class="label">Target Customer Profile *</label><textarea class="textarea" id="f-target_customer_profile" placeholder="Demographics + psychographics + decision role">${esc(b.target_customer_profile||'')}</textarea></div>
-        <div class="md:col-span-2"><label class="label">Growth Objective *</label><textarea class="textarea" id="f-growth_objective" placeholder="2x leads in 90 days from Bangalore + Mumbai">${esc(b.growth_objective||'')}</textarea></div>
-        <div><label class="label">Product Placement Context *</label><select class="select" id="f-product_placement_context">${['E-comm','Lead Gen','App Install','Retail Pickup','B2B Sales'].map(o=>`<option ${o===(b.product_placement_context||'Lead Gen')?'selected':''}>${o}</option>`).join('')}</select></div>
-        <div><label class="label">Brand Voice Notes</label><input class="input" id="f-brand_voice" value="${esc(b.brand_voice||'')}" placeholder="Bold, pragmatic, data-led"/></div>
+        <div>${reqLabel('Brand Name')}<input class="input" id="f-name" data-brand-required value="${esc(b.name||'')}" placeholder="Acme Brands" required/></div>
+        <div>${optLabel('Website URL')}<input class="input" id="f-website_url" value="${esc(b.website_url||'')}" placeholder="https://acme.com"/></div>
+        <div>${optLabel('Vertical / Sub-segment')}<input class="input" id="f-vertical" value="${esc(b.vertical||'')}" placeholder="D2C protein supplements"/></div>
+        <div>${optLabel('Location (Country → City)')}<input class="input" id="f-location" value="${esc(b.location||'')}" placeholder="India → Bangalore"/></div>
+        <div>${optLabel('Business Model')}<select class="select" id="f-business_model">${['B2B','B2C','B2G','D2C','Marketplace'].map(o=>`<option ${o===(b.business_model||'B2C')?'selected':''}>${o}</option>`).join('')}</select></div>
+        <div>${optLabel('Price Tier')}<select class="select" id="f-price_sensitivity_tier">${['Premium','Mid-Market','Value','Discount'].map(o=>`<option ${o===(b.price_sensitivity_tier||'Mid-Market')?'selected':''}>${o}</option>`).join('')}</select></div>
+        <div>${optLabel('Purchase Cycle')}<input class="input" id="f-purchase_cycle_length" value="${esc(b.purchase_cycle_length||'')}" placeholder="14 days / 3 months"/></div>
+        <div>${optLabel('Avg Transaction Value')}<input class="input" id="f-avg_transaction_value" value="${esc(b.avg_transaction_value||'')}" placeholder="₹1,800 AOV"/></div>
+        <div>${optLabel('Time Horizon')}<select class="select" id="f-time_horizon">${['30','60','90','180','365'].map(o=>`<option value="${o}" ${o===String(b.time_horizon||'30')?'selected':''}>${o} days</option>`).join('')}</select></div>
+        <div class="md:col-span-2">${reqLabel('Target Customer Profile')}<textarea class="textarea" id="f-target_customer_profile" data-brand-required placeholder="Demographics + psychographics + decision role" required>${esc(b.target_customer_profile||'')}</textarea></div>
+        <div class="md:col-span-2">${reqLabel('Growth Objective')}<textarea class="textarea" id="f-growth_objective" data-brand-required placeholder="2x leads in 90 days from Bangalore + Mumbai" required>${esc(b.growth_objective||'')}</textarea></div>
+        <div class="md:col-span-2">${reqLabel('Brand Tone')}<textarea class="textarea" id="f-brand_tone" data-brand-required placeholder="e.g. Bold, witty, authoritative, warm, playful — how the brand sounds" required style="min-height:64px">${esc(b.brand_tone||b.brand_tone_personality||'')}</textarea></div>
+        <div class="md:col-span-2">${reqLabel('Brand Personality')}<textarea class="textarea" id="f-brand_personality" data-brand-required placeholder="e.g. The savvy friend, the trusted expert, the rebel challenger — who the brand is" required style="min-height:64px">${esc(b.brand_personality||'')}</textarea></div>
+        <div>${reqLabel('Brand Language')}<select class="select" id="f-brand_language" data-brand-required required>
+          <option value="" ${!b.brand_language?'selected':''} disabled>Select language…</option>
+          ${BRAND_LANGUAGE_OPTIONS.map(o=>`<option value="${esc(o)}" ${o===(b.brand_language||'')?'selected':''}>${esc(o)}</option>`).join('')}
+        </select></div>
+        <div>${optLabel('Product Placement Context')}<select class="select" id="f-product_placement_context">${['E-comm','Lead Gen','App Install','Retail Pickup','B2B Sales'].map(o=>`<option ${o===(b.product_placement_context||'Lead Gen')?'selected':''}>${o}</option>`).join('')}</select></div>
+        <div>${optLabel('Additional Voice Notes')}<input class="input" id="f-brand_voice" value="${esc(b.brand_voice||'')}" placeholder="Optional extra nuance beyond tone & personality"/></div>
       </div>
       <div class="flex justify-end gap-2 mt-6">
-        <button class="btn" data-close-modal>Cancel</button>
-        <button class="btn primary" data-action="save-brand">${b.id?'Save Changes':'Create Brand'}</button>
+        <button type="button" class="btn" data-close-modal ${state._saveBrandInFlight?'disabled':''}>Cancel</button>
+        <button type="button" class="btn primary" data-action="save-brand" ${state._saveBrandInFlight?'disabled':''}>${state._saveBrandInFlight?'Saving…':(b.id?'Save Changes':'Create Brand')}</button>
       </div>
     </div>
   </div>`;
 }
 
+const CALENDAR_CONTENT_DIRECTION_FIELD={id:'g-content-direction',message:'Content direction is required — describe what this calendar should achieve.'};
+
+/** Platform → post format options (value = stored in post.format for generation) */
+const CHANNEL_FORMAT_OPTIONS={
+  Instagram:[
+    {label:'Reel',value:'Reel'},{label:'Carousel',value:'Carousel'},{label:'Static Post',value:'Static'},
+    {label:'Story',value:'Story'},{label:'Live',value:'Live'},
+  ],
+  Facebook:[
+    {label:'Reel',value:'Reel'},{label:'Video Post',value:'Reel'},{label:'Carousel',value:'Carousel'},
+    {label:'Static Post',value:'Static'},{label:'Story',value:'Story'},{label:'Live',value:'Live'},
+  ],
+  LinkedIn:[
+    {label:'Document Post',value:'Document Post'},{label:'Carousel',value:'Carousel'},{label:'Static Post',value:'Static'},
+    {label:'Video',value:'Reel'},{label:'Live',value:'Live'},{label:'Newsletter Article',value:'Long-form Video'},
+  ],
+  YouTube:[
+    {label:'Short',value:'Short'},{label:'Long-form Video',value:'Long-form Video'},
+    {label:'Community Post',value:'Static'},{label:'Live Stream',value:'Live'},
+  ],
+  TikTok:[
+    {label:'Video',value:'Reel'},{label:'Story',value:'Story'},{label:'Live',value:'Live'},
+  ],
+  X:[
+    {label:'Post',value:'Static'},{label:'Thread',value:'Thread'},{label:'Video',value:'Reel'},
+    {label:'Poll',value:'Static'},{label:'Space (Live)',value:'Live'},
+  ],
+  Threads:[
+    {label:'Text Post',value:'Static'},{label:'Carousel',value:'Carousel'},{label:'Video',value:'Reel'},
+    {label:'Reply Thread',value:'Thread'},
+  ],
+};
+
+const CALENDAR_PLATFORM_ORDER=['Instagram','Facebook','LinkedIn','YouTube','TikTok','X','Threads'];
+
+const PLATFORM_CANONICAL={
+  instagram:'Instagram',ig:'Instagram',
+  facebook:'Facebook',fb:'Facebook',
+  linkedin:'LinkedIn',li:'LinkedIn',
+  youtube:'YouTube',yt:'YouTube',
+  tiktok:'TikTok',tt:'TikTok',
+  twitter:'X',x:'X',
+  threads:'Threads',th:'Threads',
+};
+
+function normalizeCalendarPlatform(platform){
+  const raw=String(platform||'').trim();
+  if(!raw) return raw;
+  const hit=CALENDAR_PLATFORM_ORDER.find(p=>p.toLowerCase()===raw.toLowerCase());
+  if(hit) return hit;
+  const key=raw.toLowerCase().replace(/[^a-z0-9]/g,'');
+  return PLATFORM_CANONICAL[key]||raw;
+}
+
+function getDefaultChannelFormat(platform){
+  return CHANNEL_FORMAT_OPTIONS[platform]?.[0]?.value||'Reel';
+}
+
+function getChanPlanDefaults(businessModel){
+  const bm=businessModel||'B2C';
+  const plans={
+    B2B:{LinkedIn:{'Document Post':8,'Carousel':4,'Reel':3},YouTube:{Short:4,'Long-form Video':2},X:{Thread:4,Static:4},Instagram:{Reel:2,Carousel:2}},
+    B2C:{Instagram:{Reel:8,Carousel:4,Story:2},TikTok:{Reel:10},YouTube:{Short:3,'Long-form Video':2},Facebook:{Reel:3,Carousel:2},X:{Thread:2,Static:1},Threads:{Static:2,Carousel:1}},
+    D2C:{Instagram:{Reel:10,Carousel:4,Story:2},TikTok:{Reel:10},YouTube:{Short:3,'Long-form Video':2},Facebook:{Reel:3,Carousel:1},Threads:{Carousel:3,Reel:2}},
+    B2G:{LinkedIn:{'Document Post':8,Carousel:4,Static:2},Facebook:{Carousel:4,Reel:4},X:{Thread:4,Static:2},YouTube:{Short:3,'Long-form Video':1},Instagram:{Carousel:2,Reel:2}},
+    Marketplace:{Instagram:{Reel:8,Carousel:4},TikTok:{Reel:6},YouTube:{Short:2,'Long-form Video':2},Facebook:{Carousel:3,Reel:3},LinkedIn:{Carousel:2,'Document Post':2},X:{Thread:2,Static:2}},
+  };
+  return JSON.parse(JSON.stringify(plans[bm]||plans.B2C));
+}
+
+function migrateLegacyChanToPlan(){
+  const plan={};
+  const sel=state._chanSel||{};
+  const fmts=state._chanFormats||{};
+  for(const [platform,count] of Object.entries(sel)){
+    const n=Number(count)||0;
+    if(n>0) plan[platform]={[fmts[platform]||getDefaultChannelFormat(platform)]:n};
+  }
+  return plan;
+}
+
+function ensureChanPlanState(){
+  if(state._chanPlan) return state._chanPlan;
+  if(state._chanSel&&Object.values(state._chanSel).some(v=>Number(v)>0)){
+    state._chanPlan=migrateLegacyChanToPlan();
+    return state._chanPlan;
+  }
+  const brand=state.brands.find(b=>b.id===state.activeBrandId);
+  state._chanPlan=getChanPlanDefaults(brand?.business_model);
+  return state._chanPlan;
+}
+
+function platformTotalFromPlan(plan,platform){
+  const fmts=plan?.[platform]||{};
+  return Object.values(fmts).reduce((s,v)=>s+(Number(v)||0),0);
+}
+
+function getTotalPostsFromPlan(plan){
+  return Object.keys(plan||{}).reduce((s,p)=>s+platformTotalFromPlan(plan,p),0);
+}
+
+function activePlatformCountFromPlan(plan){
+  return Object.keys(plan||{}).filter(p=>platformTotalFromPlan(plan,p)>0).length;
+}
+
+function slotKey(platform,format){
+  return `${normalizeCalendarPlatform(platform)}|${format}`;
+}
+
+function parseChanPlatformFormat(key){
+  const s=String(key||'');
+  const sep=s.indexOf('|');
+  if(sep<0) return {platform:'',format:''};
+  return {platform:s.slice(0,sep),format:s.slice(sep+1)};
+}
+
+function sanitizeChanPlan(plan){
+  const out={};
+  for(const [platform,fmts] of Object.entries(plan||{})){
+    const row={};
+    for(const [format,count] of Object.entries(fmts||{})){
+      const n=Math.max(0,Math.min(999,Number(count)||0));
+      if(n>0) row[format]=n;
+    }
+    if(Object.keys(row).length) out[platform]=row;
+  }
+  return out;
+}
+
+function buildChannelEntries(plan){
+  const entries=[];
+  const seen=new Set();
+  for(const platform of CALENDAR_PLATFORM_ORDER){
+    const fmts=plan?.[platform];
+    if(!fmts) continue;
+    for(const [format,count] of Object.entries(fmts)){
+      const n=Number(count)||0;
+      if(n>0){
+        entries.push({platform,format,count:n});
+        seen.add(platform);
+      }
+    }
+  }
+  for(const [platform,fmts] of Object.entries(plan||{})){
+    if(seen.has(platform)) continue;
+    for(const [format,count] of Object.entries(fmts)){
+      const n=Number(count)||0;
+      if(n>0) entries.push({platform:normalizeCalendarPlatform(platform),format,count:n});
+    }
+  }
+  return entries;
+}
+
+function buildPostSlotsFromEntries(entries){
+  const slots=[];
+  for(const e of entries||[]){
+    for(let i=0;i<e.count;i++) slots.push({platform:e.platform,format:e.format});
+  }
+  return slots;
+}
+
+function activeFormatsForPlatform(plan,platform){
+  const fmts=plan?.[platform]||{};
+  return new Set(
+    Object.entries(fmts).filter(([,c])=>Number(c)>0).map(([format])=>format)
+  );
+}
+
+function pruneChanPlatformZeros(plan,platform){
+  const fmts=plan?.[platform];
+  if(!fmts) return;
+  for(const [format,count] of Object.entries(fmts)){
+    if(!(Number(count)>0)) delete fmts[format];
+  }
+  if(!Object.keys(fmts).length) delete plan[platform];
+}
+
+function nextUnusedFormatForPlatform(plan,platform){
+  const used=activeFormatsForPlatform(plan,platform);
+  const opts=CHANNEL_FORMAT_OPTIONS[platform]||[];
+  return opts.find(o=>!used.has(o.value))||null;
+}
+
+function captureChanPlanFromUI(){
+  const plan={};
+  const root=document.getElementById('modal-host')||document;
+  root.querySelectorAll('[data-chan-fmt-input]').forEach(inp=>{
+    const {platform,format}=parseChanPlatformFormat(inp.dataset.chanFmtInput);
+    const n=Math.max(0,Math.min(999,Number(inp.value)||0));
+    if(!platform||!format) return;
+    if(n>0){
+      if(!plan[platform]) plan[platform]={};
+      plan[platform][format]=n;
+    }
+  });
+  const captured=sanitizeChanPlan(plan);
+  const fallback=sanitizeChanPlan(ensureChanPlanState());
+  const merged=Object.keys(captured).length?captured:fallback;
+  state._chanPlan=merged;
+  return merged;
+}
+
+function summarizeCalendarGenerationPlan(chanPlan,days,contentDirection){
+  const lines=[];
+  for(const e of buildChannelEntries(chanPlan)){
+    const label=CHANNEL_FORMAT_OPTIONS[e.platform]?.find(o=>o.value===e.format)?.label||e.format;
+    lines.push(`${e.platform} ${e.count}× ${label}`);
+  }
+  const dir=String(contentDirection||'').trim();
+  return [
+    `${getTotalPostsFromPlan(chanPlan)} posts · ${days} days · ${activePlatformCountFromPlan(chanPlan)} platforms`,
+    lines.length?lines.join(' · '):'',
+    dir?`Direction: ${dir.slice(0,120)}${dir.length>120?'…':''}`:'',
+  ].filter(Boolean).join('\n');
+}
+
+/** Distribute each platform+format count across day-chunks (largest remainder — never all-zero when total > 0). */
+function buildCalendarBatches(fullEntries,days,start,chunkSize=6){
+  const numChunks=Math.max(1,Math.ceil(days/chunkSize));
+  const chunks=[];
+  for(let i=0;i<numChunks;i++){
+    const dayOffset=i*chunkSize;
+    const length=Math.min(chunkSize,days-dayOffset);
+    const sd=new Date(start);
+    sd.setDate(sd.getDate()+dayOffset);
+    chunks.push({
+      startDay:dayOffset+1,
+      endDay:Math.min(dayOffset+chunkSize,days),
+      startDate:sd.toISOString().slice(0,10),
+      length,
+      entries:[],
+      total:0,
+    });
+  }
+
+  for(const entry of fullEntries||[]){
+    const total=Number(entry.count)||0;
+    if(total<=0) continue;
+    const weights=chunks.map(c=>c.length/days);
+    const raw=weights.map(w=>w*total);
+    const floors=raw.map(r=>Math.floor(r));
+    let remainder=total-floors.reduce((s,n)=>s+n,0);
+    const counts=[...floors];
+    const order=raw.map((r,i)=>({i,frac:r-floors[i]})).sort((a,b)=>b.frac-a.frac);
+    for(let k=0;remainder>0&&k<order.length;k++){
+      counts[order[k%order.length].i]++;
+      remainder--;
+    }
+    counts.forEach((count,ci)=>{
+      if(count<=0) return;
+      const ch=chunks[ci];
+      let row=ch.entries.find(e=>e.platform===entry.platform&&e.format===entry.format);
+      if(!row){
+        row={platform:entry.platform,format:entry.format,count:0};
+        ch.entries.push(row);
+      }
+      row.count+=count;
+      ch.total+=count;
+    });
+  }
+
+  const planned=fullEntries.reduce((s,e)=>s+(Number(e.count)||0),0);
+  const allocated=chunks.reduce((s,c)=>s+c.total,0);
+  if(planned>0&&allocated===0){
+    const first=chunks[0];
+    for(const entry of fullEntries){
+      if(!entry.count) continue;
+      first.entries.push({platform:entry.platform,format:entry.format,count:entry.count});
+      first.total+=entry.count;
+    }
+    for(let i=1;i<chunks.length;i++){
+      chunks[i].entries=[];
+      chunks[i].total=0;
+    }
+  }
+
+  return chunks;
+}
+
+function buildFormatContentGuidanceFromPlan(plan){
+  const lines=[];
+  for(const e of buildChannelEntries(plan||{})){
+    const guide=FORMAT_COPY_GUIDANCE[e.format];
+    if(guide) lines.push(`- **${e.platform} · ${e.format}** (${e.count} posts): ${guide}`);
+  }
+  if(!lines.length) return '';
+  return `# FORMAT CONTENT GUIDANCE (MANDATORY)
+${lines.join('\n')}
+Each post must use the structure for its assigned platform + format.`;
+}
+
+function renderChanFormatLines(platform,plan){
+  pruneChanPlatformZeros(plan,platform);
+  const fmts=plan[platform]||{};
+  const entries=Object.entries(fmts).filter(([,c])=>Number(c)>0);
+  if(!entries.length) return '';
+  const opts=CHANNEL_FORMAT_OPTIONS[platform]||[];
+  return `<div class="chan-format-lines space-y-1 mt-1 mb-1">
+    ${entries.map(([format,count])=>{
+      const optHtml=opts.map(o=>`<option value="${esc(o.value)}" ${o.value===format?'selected':''}>${esc(o.label)}</option>`).join('');
+      return `<div class="chan-format-line flex items-center gap-1.5 flex-wrap" data-chan-format-row="${esc(platform)}">
+        <select class="select chan-format-select" data-chan-format-pick="${esc(platform)}" data-chan-format-was="${esc(format)}" style="min-width:118px;max-width:140px">${optHtml}</select>
+        <button class="stepper" data-chan-fmt-step="${esc(platform)}|${esc(format)}|-1" ${count<=0?'disabled':''}>−</button>
+        <input class="stepper-input" type="number" min="0" max="999" value="${count}" data-chan-fmt-input="${esc(platform)}|${esc(format)}"/>
+        <button class="stepper" data-chan-fmt-step="${esc(platform)}|${esc(format)}|1">+</button>
+        <button type="button" class="btn ghost chan-remove-fmt" data-chan-remove-format="${esc(platform)}|${esc(format)}" title="Remove format" ${entries.length<=1?'disabled':''}>×</button>
+      </div>`;
+    }).join('')}
+    ${nextUnusedFormatForPlatform(plan,platform)?`<button type="button" class="btn ghost text-[11px] mt-0.5" style="padding:4px 10px" data-chan-add-format="${esc(platform)}">+ Add format</button>`:''}
+  </div>`;
+}
+
+function applyBatchPostSlots(posts,batchEntries,dateSchedule){
+  const slots=buildPostSlotsFromEntries(batchEntries);
+  if(!slots.length) return posts;
+
+  const buckets={};
+  for(const p of posts){
+    const k=slotKey(p.platform,p.format);
+    if(!buckets[k]) buckets[k]=[];
+    buckets[k].push(p);
+  }
+
+  const used=new Set();
+  const takeForSlot=(platform,format)=>{
+    const k=slotKey(platform,format);
+    for(const p of buckets[k]||[]){
+      if(!used.has(p)){ used.add(p); return p; }
+    }
+    for(const p of posts){
+      if(!used.has(p)){ used.add(p); return p; }
+    }
+    return null;
+  };
+
+  const result=[];
+  let dateIdx=0;
+  for(const slot of slots){
+    const p=takeForSlot(slot.platform,slot.format);
+    if(!p) continue;
+    p.platform=slot.platform;
+    p.format=slot.format;
+    if(dateSchedule?.[dateIdx]){
+      p.date=dateSchedule[dateIdx].date;
+      p.day=dateSchedule[dateIdx].day;
+    }
+    dateIdx++;
+    result.push(p);
+  }
+
+  return renumberCalendarContentIds(result);
+}
+
+const FORMAT_COPY_GUIDANCE={
+  Reel:'Vertical video (9:16). Hook in first 1–2 seconds / first line. Caption supports watch completion; mention on-screen text, pacing, pattern interrupt. creative_direction = shots, b-roll, text overlays, length ~15–60s.',
+  Short:'YouTube Short / vertical teaser. Ultra-tight hook, one idea, fast cuts, loop-friendly ending. creative_direction = 9:16, under 60s, thumb-stop first frame.',
+  Carousel:'Multi-slide swipe post. Hook = slide 1 headline. caption_preview teases slide 2; creative_direction lists 5–10 slide titles + one-line payoff per slide.',
+  Static:'Single image or text post. Hook + caption carry the message; creative_direction = layout, headline on image, visual metaphor.',
+  Story:'Ephemeral 9:16 frames (3–7 beats). Urgency, stickers, poll, swipe-up CTA. Short punchy lines; creative_direction = frame-by-frame sequence.',
+  Thread:'Numbered or chained posts (X/Threads). Hook = tweet 1; caption_preview = thread arc; creative_direction = outline each post in the chain.',
+  'Document Post':'LinkedIn document/PDF carousel. Professional, slide-by-slide thought leadership; creative_direction = doc title + section headers.',
+  'Long-form Video':'YouTube long-form. Hook promises payoff; caption_preview = chapters/value; creative_direction = intro, sections, B-roll, runtime hint.',
+  Live:'Live stream / Space / Live badge. Promote time, topic, guest; hook = why attend now; CTA = reminder, notify, register.',
+};
+
+function buildFormatContentGuidanceSection(channelFormats){
+  const lines=[];
+  for(const [platform,fmt] of Object.entries(channelFormats||{})){
+    const guide=FORMAT_COPY_GUIDANCE[fmt];
+    if(guide) lines.push(`- **${platform}** (format: ${fmt}): ${guide}`);
+  }
+  if(!lines.length) return '';
+  return `# FORMAT CONTENT GUIDANCE (MANDATORY — copy must match selected type, not generic posts)
+${lines.join('\n')}
+For each post: hook, caption_preview, and creative_direction MUST read like the format above (Reel ≠ Carousel ≠ Static ≠ Thread). Do not write carousel slide copy for a Reel or a blog-style caption for a Short.`;
+}
+
 function renderGenerateCalendarModal(m){
   const brand=state.brands.find(b=>b.id===state.activeBrandId);
-  // Initialize channel state if not set, with smart defaults per business model
-  if(!state._chanSel){
-    const bm=brand.business_model||'B2C';
-    const defaults = {
-      'B2B':       {LinkedIn:15, YouTube:6, X:8, Instagram:4, Facebook:0, TikTok:0, Threads:0},
-      'B2C':       {Instagram:14, TikTok:10, YouTube:5, Facebook:5, LinkedIn:0, X:3, Threads:3},
-      'D2C':       {Instagram:16, TikTok:10, YouTube:5, Facebook:4, LinkedIn:0, X:0, Threads:5},
-      'B2G':       {LinkedIn:14, Facebook:8, X:6, YouTube:4, Instagram:4, TikTok:0, Threads:0},
-      'Marketplace': {Instagram:14, TikTok:8, YouTube:4, Facebook:6, LinkedIn:4, X:4, Threads:0}
-    };
-    state._chanSel = JSON.parse(JSON.stringify(defaults[bm]||defaults['B2C']));
-  }
-  const ch = state._chanSel;
+  const reqLabel=(text)=>`<label class="label">${esc(text)}<span class="req-asterisk" aria-hidden="true">*</span></label>`;
+  const plan=ensureChanPlanState();
   const channels = [
     {key:'Instagram', icon:'📷', color:'#e1306c'},
     {key:'Facebook',  icon:'👤', color:'#1877f2'},
@@ -1437,16 +2551,17 @@ function renderGenerateCalendarModal(m){
     {key:'X',         icon:'𝕏',  color:'#fff'},
     {key:'Threads',   icon:'@',  color:'#fff'},
   ];
-  const total = Object.values(ch).reduce((s,v)=>s+(Number(v)||0),0);
+  const total=getTotalPostsFromPlan(plan);
   const days = Number(state._chanDays||30);
   const perDay = days>0?(total/days).toFixed(1):'0';
+  const formatRows=buildChannelEntries(plan).length;
 
   return `<div class="modal-backdrop" data-close-modal>
-    <div class="panel p-6 w-full max-w-2xl max-h-[92vh] overflow-auto scroll" onclick="event.stopPropagation()">
+    <div class="panel p-6 w-full max-w-3xl max-h-[92vh] overflow-auto scroll" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between mb-4">
         <div>
           <div class="text-[16px] font-semibold">Generate calendar</div>
-          <div class="text-[11.5px] text-[var(--ink3)]">${esc(brand.name)} · ${esc(brand.vertical||'')}</div>
+          <div class="text-[11.5px] text-[var(--ink3)]">${esc(brand.name)} · ${esc(brand.vertical||'')} · <span class="req-asterisk">*</span> required fields</div>
         </div>
         <button class="btn ghost" data-close-modal>${ICONS.close}</button>
       </div>
@@ -1471,7 +2586,7 @@ function renderGenerateCalendarModal(m){
 
         <div>
           <div class="flex items-center justify-between mb-2">
-            <label class="label" style="margin:0">Channels &amp; post quantity</label>
+            <label class="label" style="margin:0">Channels — multiple formats &amp; quantities per platform</label>
             <div class="flex gap-2">
               <button class="btn ghost" style="padding:4px 9px;font-size:11px" data-chan-action="reset">Reset</button>
               <button class="btn ghost" style="padding:4px 9px;font-size:11px" data-chan-action="clear">Clear all</button>
@@ -1479,22 +2594,21 @@ function renderGenerateCalendarModal(m){
           </div>
           <div class="panel2 p-3 space-y-1.5">
             ${channels.map(c=>{
-              const count = Number(ch[c.key]||0);
-              const active = count>0;
+              const platformTotal=platformTotalFromPlan(plan,c.key);
+              const active=platformTotal>0;
               return `
-              <div class="flex items-center gap-3 p-2 rounded-lg ${active?'channel-row-active':'channel-row'}" data-chan-row="${c.key}">
-                <label class="flex items-center gap-2.5 flex-1 cursor-pointer min-w-0" data-chan-toggle="${c.key}">
-                  <span class="custom-checkbox ${active?'checked':''}">
-                    ${active?'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5"><path d="M5 12l5 5L20 7"/></svg>':''}
-                  </span>
-                  <span class="w-6 h-6 rounded-md flex items-center justify-center text-[12px] shrink-0" style="background:${c.color};color:${c.key==='TikTok'||c.key==='X'||c.key==='Threads'?'#000':'#fff'}">${c.icon}</span>
-                  <span class="text-[13px] font-medium ${active?'text-[var(--ink)]':'text-[var(--ink2)]'}">${c.key}</span>
-                </label>
-                <div class="flex items-center gap-1.5">
-                  <button class="stepper" data-chan-step="${c.key}|-1" ${!active||count<=0?'disabled':''}>−</button>
-                  <input class="stepper-input" type="number" min="0" max="999" value="${count}" data-chan-input="${c.key}"/>
-                  <button class="stepper" data-chan-step="${c.key}|1">+</button>
+              <div class="rounded-lg p-2 ${active?'channel-row-active':'channel-row'}" data-chan-row="${c.key}">
+                <div class="flex items-center gap-3">
+                  <label class="flex items-center gap-2.5 flex-1 cursor-pointer min-w-0" data-chan-toggle="${c.key}">
+                    <span class="custom-checkbox ${active?'checked':''}">
+                      ${active?'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5"><path d="M5 12l5 5L20 7"/></svg>':''}
+                    </span>
+                    <span class="w-6 h-6 rounded-md flex items-center justify-center text-[12px] shrink-0" style="background:${c.color};color:${c.key==='TikTok'||c.key==='X'||c.key==='Threads'?'#000':'#fff'}">${c.icon}</span>
+                    <span class="text-[13px] font-medium ${active?'text-[var(--ink)]':'text-[var(--ink2)]'}">${c.key}</span>
+                    ${active?`<span class="text-[11px] text-[var(--ink3)] mono ml-1">${platformTotal} posts</span>`:''}
+                  </label>
                 </div>
+                ${active?renderChanFormatLines(c.key,plan):''}
               </div>`;
             }).join('')}
           </div>
@@ -1510,15 +2624,17 @@ function renderGenerateCalendarModal(m){
             <div class="text-[20px] font-bold mono ${total>0?'text-[var(--ink)]':'text-[var(--ink3)]'}">${perDay}</div>
           </div>
           <div class="panel2 p-3 text-center">
-            <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Active Channels</div>
-            <div class="text-[20px] font-bold mono ${total>0?'text-[var(--accent2)]':'text-[var(--ink3)]'}">${Object.values(ch).filter(v=>v>0).length}</div>
+            <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Format lines</div>
+            <div class="text-[20px] font-bold mono ${formatRows>0?'text-[var(--accent2)]':'text-[var(--ink3)]'}">${formatRows}</div>
           </div>
         </div>
 
-        <div><label class="label">Special focus / extra context</label><textarea class="textarea" id="g-focus" placeholder="Holiday push, product launch, hiring campaign, etc."></textarea></div>
+        <div>${reqLabel('Content direction for this calendar')}<textarea class="textarea" id="g-content-direction" data-calendar-required placeholder="What should this calendar achieve? e.g. Q2 product launch, Diwali sale, hiring push, thought leadership in AI — be specific." required style="min-height:88px">${esc(state._calendarContentDirection||'')}</textarea></div>
+
+        ${renderBrandContextPreview(brand)}
 
         ${total===0?`<div class="panel2 p-3 text-[11.5px]" style="border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.06);color:#fbbf24">⚠ Select at least one channel and set post quantity before generating.</div>`:`<div class="panel2 p-3 text-[11.5px] text-[var(--ink2)]">
-          Will generate <b class="text-[var(--ink)]">${total} posts</b> across <b class="text-[var(--ink)]">${Object.values(ch).filter(v=>v>0).length} channels</b> over <b class="text-[var(--ink)]">${days} days</b>, EVI-scored and funnel-mapped per the McKinsey Senior Partner v2.0 framework. Takes ~${Math.ceil(total/12)*30}–${Math.ceil(total/12)*60}s.
+          Will generate <b class="text-[var(--ink)]">${total} posts</b> across <b class="text-[var(--ink)]">${activePlatformCountFromPlan(plan)} platforms</b> and <b class="text-[var(--ink)]">${formatRows} format lines</b>, spread over <b class="text-[var(--ink)]">${days} days</b>. Each row’s quantity uses that format (e.g. Reels + Carousels on the same platform). Takes ~${Math.ceil(total/12)*30}–${Math.ceil(total/12)*60}s.
         </div>`}
       </div>
 
@@ -1834,13 +2950,6 @@ function renderErrorModal(m){
   </div>`;
 }
 
-function renderToast(){
-  const colors={ok:'var(--good)',err:'var(--bad)',info:'var(--accent)'};
-  return `<div class="fixed bottom-6 right-6 z-[60] panel p-3 px-4 fadein" style="border-color:${colors[state.toast.kind]||'var(--line)'}">
-    <div class="text-[12.5px] font-medium" style="color:${colors[state.toast.kind]||'var(--ink)'}">${esc(state.toast.msg)}</div>
-  </div>`;
-}
-
 function renderSelectBrandHint(msg){
   return `<div class="panel empty">
     <div class="text-[14px] font-semibold mb-1 text-[var(--ink)]">No brand selected</div>
@@ -1849,207 +2958,392 @@ function renderSelectBrandHint(msg){
   </div>`;
 }
 
-/* ========= HANDLERS ========= */
-function attachHandlers(){
-  document.querySelectorAll('[data-nav]').forEach(el=>{
-    el.addEventListener('click',()=>{ goto(el.dataset.nav); });
-  });
-  const sw=document.getElementById('brand-switcher');
-  if(sw) sw.addEventListener('change',e=>setActiveBrand(e.target.value));
+/* ========= HANDLERS (delegated once — no re-bind on every render) ========= */
+const APP_HANDLERS_VERSION=2;
 
-  document.querySelectorAll('[data-action]').forEach(el=>{
-    el.addEventListener('click',(e)=>{ e.stopPropagation(); handleAction(el.dataset.action); });
-  });
-  // Backdrop click closes modal (only when clicking the backdrop itself)
-  document.querySelectorAll('.modal-backdrop[data-close-modal]').forEach(el=>{
-    el.addEventListener('click',e=>{ if(e.target===el) closeModal(); });
-  });
-  // Explicit close buttons
-  document.querySelectorAll('button[data-close-modal]').forEach(el=>{
-    el.addEventListener('click',e=>{ e.stopPropagation(); closeModal(); });
-  });
-  document.querySelectorAll('[data-edit-brand]').forEach(el=>el.addEventListener('click',e=>{ e.stopPropagation(); const b=state.brands.find(x=>x.id===el.dataset.editBrand); openModal({kind:'brand-form',data:{...b}}); }));
-  document.querySelectorAll('[data-delete-brand]').forEach(el=>el.addEventListener('click',e=>{ e.stopPropagation(); const id=el.dataset.deleteBrand; const b=state.brands.find(x=>x.id===id); openModal({kind:'confirm',title:'Delete brand?',body:`This will permanently remove "${b.name}" and all its calendars + briefs.`,danger:true,confirmLabel:'Delete',onYes:async()=>{ await Store.deleteBrand(id); state.brands=await Store.listBrands(); if(state.activeBrandId===id) state.activeBrandId=null; closeModal(); showToast('Brand deleted','ok'); }}); }));
-  document.querySelectorAll('[data-open-brand]').forEach(el=>el.addEventListener('click',e=>{ setActiveBrand(el.dataset.openBrand); state.view='calendar'; loadBrandWorkspace(); }));
-  document.querySelectorAll('[data-open-cal]').forEach(el=>el.addEventListener('click',()=>{ const c=state.calendars.find(x=>x.id===el.dataset.openCal); state.activeCalendar=c; state._calendarEditMode=false; render(); }));
-  document.querySelectorAll('[data-delete-cal]').forEach(el=>el.addEventListener('click',e=>{ e.stopPropagation(); const id=el.dataset.deleteCal; openModal({kind:'confirm',title:'Delete calendar?',body:'This calendar and its posts will be removed.',danger:true,confirmLabel:'Delete',onYes:async()=>{ await Store.deleteCalendar(state.activeBrandId,id); state.calendars=await Store.listCalendars(state.activeBrandId); if(state.activeCalendar&&state.activeCalendar.id===id) state.activeCalendar=null; closeModal(); showToast('Calendar deleted','ok'); }}); }));
-  document.querySelectorAll('[data-scroll-to-post]').forEach(el=>{
-    const go=()=>scrollToPostRow(Number(el.dataset.scrollToPost));
-    el.addEventListener('click',e=>{ e.stopPropagation(); go(); });
-    el.addEventListener('keydown',e=>{
-      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); go(); }
-    });
-  });
-  document.querySelectorAll('[data-add-post-date]').forEach(el=>{
-    el.addEventListener('click', e=>{
-      e.stopPropagation();
-      const date = el.dataset.addPostDate;
-      if(!date) return;
-      openAddPostModal(date, dayNameFromDate(date));
-    });
-  });
-  document.querySelectorAll('[data-delete-post-idx]').forEach(el=>{
-    el.addEventListener('click', e=>{
-      e.stopPropagation();
-      deleteCalendarPost(Number(el.dataset.deletePostIdx));
-    });
-  });
-  document.querySelectorAll('[data-new-post-field]').forEach(el=>{
-    const sync=()=>{
-      if(!state._newPost) return;
-      const k = el.dataset.newPostField;
-      if(!k) return;
-      if(el.type === 'number') state._newPost[k] = el.value === '' ? '' : Number(el.value);
-      else state._newPost[k] = el.value;
-    };
-    el.addEventListener('input', sync);
-    el.addEventListener('change', sync);
-  });
-  document.querySelectorAll('[data-post-detail]').forEach(el=>el.addEventListener('click',()=>{ const i=Number(el.dataset.postDetail); openModal({kind:'post-detail',data:state.activeCalendar.posts[i]}); }));
-  document.querySelectorAll('[data-edit-hook]').forEach(el=>{
-    el.addEventListener('click', e=>{
-      e.stopPropagation();
-      const idx = Number(el.dataset.editHook);
-      if(el.closest('.post-cal-row')) openPostHookEdit(idx);
-      else startInlineHookEdit(idx);
-    });
-  });
-  document.querySelectorAll('[data-inline-hook-input]').forEach(el=>{
-    el.addEventListener('input', ()=>{
-      state._inlineHookDraft = el.value;
-    });
-    el.addEventListener('keydown', e=>{
-      if(e.key === 'Enter'){ e.preventDefault(); handleAction('save-inline-hook'); }
-      if(e.key === 'Escape'){ e.preventDefault(); handleAction('cancel-inline-hook'); }
-    });
-  });
+function bindAppHandlersOnce(){
+  if(window.__scAppHandlersV===APP_HANDLERS_VERSION) return;
+  window.__scAppHandlersV=APP_HANDLERS_VERSION;
+  // Capture phase so modal panel stopPropagation does not block [data-action] clicks
+  document.addEventListener('click', onAppClick, true);
+  document.addEventListener('change', onAppChange);
+  document.addEventListener('input', onAppInput);
+  document.addEventListener('keydown', onAppKeydown);
+}
+
+function onAppClick(e){
+  const backdrop=e.target.closest('.modal-backdrop[data-close-modal]');
+  if(backdrop && e.target===backdrop){ closeModal(); return; }
+
+  const closeBtn=e.target.closest('button[data-close-modal]');
+  if(closeBtn){ e.stopPropagation(); closeModal(); return; }
+
+  const actionEl=e.target.closest('[data-action]');
+  if(actionEl){
+    e.stopPropagation();
+    if(actionEl.disabled) return;
+    handleAction(actionEl.dataset.action);
+    return;
+  }
+
+  const navEl=e.target.closest('[data-nav]');
+  if(navEl){ goto(navEl.dataset.nav); return; }
+
+  const editBrand=e.target.closest('[data-edit-brand]');
+  if(editBrand){
+    e.stopPropagation();
+    const b=state.brands.find(x=>x.id===editBrand.dataset.editBrand);
+    openModal({kind:'brand-form',data:{...b}});
+    return;
+  }
+
+  const delBrand=e.target.closest('[data-delete-brand]');
+  if(delBrand){
+    e.stopPropagation();
+    const id=delBrand.dataset.deleteBrand;
+    const b=state.brands.find(x=>x.id===id);
+    openModal({kind:'confirm',title:'Delete brand?',body:`This will permanently remove "${b.name}" and all its calendars + briefs.`,danger:true,confirmLabel:'Delete',onYes:async()=>{ await Store.deleteBrand(id); state.brands=await Store.listBrands(); if(state.activeBrandId===id) state.activeBrandId=null; clearModalState(); render(); showToast('Brand deleted','ok'); }});
+    return;
+  }
+
+  const openBrand=e.target.closest('[data-open-brand]');
+  if(openBrand){
+    const id=openBrand.dataset.openBrand;
+    const b=state.brands.find(x=>x.id===id);
+    if(b && !isBrandProfileComplete(b)){
+      showToast('Complete required brand fields before opening the calendar','err',5000);
+      openModal({kind:'brand-form',data:{...b}});
+      return;
+    }
+    state.view='calendar';
+    setActiveBrand(id);
+    return;
+  }
+
+  const delCal=e.target.closest('[data-delete-cal]');
+  if(delCal){
+    e.preventDefault();
+    e.stopPropagation();
+    const id=delCal.dataset.deleteCal;
+    const brandId=state.activeBrandId;
+    if(!brandId||!id){ showToast('Cannot delete — no brand or calendar selected','err'); return; }
+    openModal({kind:'confirm',title:'Delete calendar?',body:'This calendar and its posts will be removed.',danger:true,confirmLabel:'Delete',onYes:async()=>{
+      await Store.deleteCalendar(brandId,id);
+      state.calendars=await Store.listCalendars(brandId);
+      if(state.activeCalendar&&state.activeCalendar.id===id) state.activeCalendar=state.calendars[0]||null;
+      clearModalState();
+      render();
+      showToast('Calendar deleted','ok');
+    }});
+    return;
+  }
+
+  const openCal=e.target.closest('[data-open-cal]');
+  if(openCal){
+    e.stopPropagation();
+    const c=state.calendars.find(x=>x.id===openCal.dataset.openCal);
+    state.activeCalendar=c;
+    state._calendarEditMode=false;
+    render();
+    return;
+  }
+
+  const scrollPost=e.target.closest('[data-scroll-to-post]');
+  if(scrollPost){
+    e.stopPropagation();
+    scrollToPostRow(Number(scrollPost.dataset.scrollToPost));
+    return;
+  }
+
+  const addPostDate=e.target.closest('[data-add-post-date]');
+  if(addPostDate){
+    e.stopPropagation();
+    const date=addPostDate.dataset.addPostDate;
+    if(date) openAddPostModal(date, dayNameFromDate(date));
+    return;
+  }
+
+  const delPostIdx=e.target.closest('[data-delete-post-idx]');
+  if(delPostIdx){
+    e.stopPropagation();
+    deleteCalendarPost(Number(delPostIdx.dataset.deletePostIdx));
+    return;
+  }
+
+  const postDetail=e.target.closest('[data-post-detail]');
+  if(postDetail){
+    openModal({kind:'post-detail',data:state.activeCalendar.posts[Number(postDetail.dataset.postDetail)]});
+    return;
+  }
+
+  const editHook=e.target.closest('[data-edit-hook]');
+  if(editHook){
+    e.stopPropagation();
+    const idx=Number(editHook.dataset.editHook);
+    if(editHook.closest('.post-cal-row')) openPostHookEdit(idx);
+    else startInlineHookEdit(idx);
+    return;
+  }
+
+  const genBriefPost=e.target.closest('[data-gen-brief-post]');
+  if(genBriefPost){
+    e.stopPropagation();
+    const i=Number(genBriefPost.dataset.genBriefPost);
+    openModal({kind:'post-detail',data:state.activeCalendar.posts[i],briefFlow:true});
+    return;
+  }
+
+  const viewBrief=e.target.closest('[data-view-brief]');
+  if(viewBrief){
+    e.stopPropagation();
+    (async()=>{
+      const [bid,id]=viewBrief.dataset.viewBrief.split('|');
+      let b=(state.briefs||[]).find(x=>x.id===id);
+      if(!b){ const briefs=await Store.listBriefs(bid); b=briefs.find(x=>x.id===id); }
+      if(b) openModal({kind:'view-brief',data:b});
+    })();
+    return;
+  }
+
+  const delBrief=e.target.closest('[data-delete-brief]');
+  if(delBrief){
+    e.stopPropagation();
+    const [bid,id]=delBrief.dataset.deleteBrief.split('|');
+    openModal({kind:'confirm',title:'Delete brief?',danger:true,body:'This brief will be permanently removed.',confirmLabel:'Delete',onYes:async()=>{ await Store.deleteBrief(bid,id); state.allBriefs=await Store.listAllBriefs(); clearModalState(); render(); showToast('Brief deleted','ok'); }});
+    return;
+  }
+
+  const setVariant=e.target.closest('[data-set-active-variant]');
+  if(setVariant){
+    e.stopPropagation();
+    setBriefVariantActive(setVariant.dataset.setActiveVariant);
+    return;
+  }
+
+  if(e.target.closest('[data-chan-format-pick],[data-chan-fmt-input]')) return;
+
+  const chanFmtStep=e.target.closest('[data-chan-fmt-step]');
+  if(chanFmtStep){
+    e.preventDefault(); e.stopPropagation();
+    const parts=chanFmtStep.dataset.chanFmtStep.split('|');
+    const platform=parts[0];
+    const format=parts.slice(1,-1).join('|');
+    const delta=Number(parts[parts.length-1]);
+    const plan=ensureChanPlanState();
+    if(!plan[platform]) plan[platform]={};
+    const cur=Number(plan[platform][format]||0);
+    const next=Math.max(0,Math.min(999,cur+delta));
+    if(next>0) plan[platform][format]=next;
+    else delete plan[platform][format];
+    pruneChanPlatformZeros(plan,platform);
+    render({modalOnly:true});
+    return;
+  }
+
+  const chanAddFmt=e.target.closest('[data-chan-add-format]');
+  if(chanAddFmt){
+    e.preventDefault(); e.stopPropagation();
+    const platform=chanAddFmt.dataset.chanAddFormat;
+    const plan=ensureChanPlanState();
+    const next=nextUnusedFormatForPlatform(plan,platform);
+    if(next){
+      if(!plan[platform]) plan[platform]={};
+      plan[platform][next.value]=3;
+    }
+    render({modalOnly:true});
+    return;
+  }
+
+  const chanRemoveFmt=e.target.closest('[data-chan-remove-format]');
+  if(chanRemoveFmt){
+    e.preventDefault(); e.stopPropagation();
+    const {platform,format}=parseChanPlatformFormat(chanRemoveFmt.dataset.chanRemoveFormat);
+    const plan=ensureChanPlanState();
+    if(plan[platform]) delete plan[platform][format];
+    pruneChanPlatformZeros(plan,platform);
+    render({modalOnly:true});
+    return;
+  }
+
+  const chanToggle=e.target.closest('[data-chan-toggle]');
+  if(chanToggle){
+    e.preventDefault();
+    const key=chanToggle.dataset.chanToggle;
+    const plan=ensureChanPlanState();
+    if(platformTotalFromPlan(plan,key)>0) delete plan[key];
+    else plan[key]={[getDefaultChannelFormat(key)]:Math.max(3,Math.round((Number(state._chanDays||30))/10))};
+    render({modalOnly:true});
+    return;
+  }
+
+  const chanAction=e.target.closest('[data-chan-action]');
+  if(chanAction){
+    e.preventDefault();
+    const a=chanAction.dataset.chanAction;
+    if(a==='clear') state._chanPlan={};
+    if(a==='reset'){ state._chanPlan=null; state._chanSel=null; state._chanFormats=null; }
+    render({modalOnly:true});
+    return;
+  }
+
+  const sortBtn=e.target.closest('[data-post-sort]');
+  if(sortBtn && e.target.closest('#all-posts-panel')){
+    e.preventDefault(); e.stopPropagation();
+    state._postsFilter=state._postsFilter||{};
+    const key=sortBtn.getAttribute('data-post-sort');
+    if(!key) return;
+    if(state._postsFilter.sortKey===key){
+      state._postsFilter.sortDir=state._postsFilter.sortDir==='asc'?'desc':'asc';
+    }else{
+      state._postsFilter.sortKey=key;
+      state._postsFilter.sortDir='asc';
+    }
+    render();
+  }
+}
+
+function onAppChange(e){
+  const el=e.target;
+  if(el.dataset.brandRequired){
+    if(String(el.value||'').trim()){
+      el.classList.remove('field-invalid');
+      el.removeAttribute('aria-invalid');
+      const anyInvalid=document.querySelector('[data-brand-required].field-invalid');
+      if(!anyInvalid) updateBrandFormErrorBanner(null);
+    }
+  }
+  if(el.id==='brand-switcher'){ setActiveBrand(el.value); return; }
+  if(el.dataset.chanFormatPick){
+    const platform=el.dataset.chanFormatPick;
+    const was=el.dataset.chanFormatWas;
+    const now=el.value;
+    const plan=ensureChanPlanState();
+    if(plan[platform]&&was!==now){
+      const count=Number(plan[platform][was]||0);
+      delete plan[platform][was];
+      if(count>0){
+        const existing=Number(plan[platform][now]||0);
+        plan[platform][now]=existing+count;
+      }
+      pruneChanPlatformZeros(plan,platform);
+    }
+    render({modalOnly:true});
+    return;
+  }
+  if(el.dataset.chanFmtInput){
+    const {platform,format}=parseChanPlatformFormat(el.dataset.chanFmtInput);
+    const n=Math.max(0,Math.min(999,Number(el.value)||0));
+    const plan=ensureChanPlanState();
+    if(!plan[platform]) plan[platform]={};
+    if(n>0) plan[platform][format]=n;
+    else delete plan[platform][format];
+    pruneChanPlatformZeros(plan,platform);
+    render({modalOnly:true});
+    return;
+  }
+  if(el.dataset.chanDays){
+    state._chanDays=Number(el.value);
+    render({modalOnly:true});
+    return;
+  }
+  if(el.dataset.postFilter){
+    state._postsFilter=state._postsFilter||{};
+    state._postsFilter[el.dataset.postFilter]=el.value||null;
+    render();
+  }
+}
+
+function onAppInput(e){
+  const el=e.target;
+  if(el.dataset.brandRequired){
+    if(String(el.value||'').trim()){
+      el.classList.remove('field-invalid');
+      el.removeAttribute('aria-invalid');
+      const anyInvalid=document.querySelector('[data-brand-required].field-invalid');
+      if(!anyInvalid) updateBrandFormErrorBanner(null);
+    }
+  }
+  if(el.dataset.calendarRequired){
+    state._calendarContentDirection=el.value;
+    if(String(el.value||'').trim()){
+      el.classList.remove('field-invalid');
+      el.removeAttribute('aria-invalid');
+      updateCalendarGenerateErrorBanner(null);
+    }
+  }
+  if(el.dataset.newPostField){
+    if(!state._newPost) return;
+    const k=el.dataset.newPostField;
+    if(!k) return;
+    if(el.type==='number') state._newPost[k]=el.value===''?'':Number(el.value);
+    else state._newPost[k]=el.value;
+    return;
+  }
+  if(el.dataset.inlineHookInput){
+    state._inlineHookDraft=el.value;
+    return;
+  }
+  if(el.dataset.briefField && state._briefEdit){
+    state._briefEdit[el.dataset.briefField]=el.value;
+    return;
+  }
+  if(el.dataset.postField && state._postEdit){
+    const k=el.dataset.postField;
+    state._postEdit[k]=(k==='evi_score')?Number(el.value):el.value;
+    return;
+  }
+  if(el.id==='posts-search'){
+    state._postsFilter=state._postsFilter||{};
+    state._postsFilter.q=el.value;
+    clearTimeout(window._postsSearchTimer);
+    window._postsSearchTimer=setTimeout(()=>render(),150);
+  }
+}
+
+function onAppKeydown(e){
+  const scrollPost=e.target.closest('[data-scroll-to-post]');
+  if(scrollPost && (e.key==='Enter' || e.key===' ')){
+    e.preventDefault();
+    scrollToPostRow(Number(scrollPost.dataset.scrollToPost));
+    return;
+  }
+  if(!e.target.matches('[data-inline-hook-input]')) return;
+  if(e.key==='Enter'){ e.preventDefault(); handleAction('save-inline-hook'); }
+  if(e.key==='Escape'){ e.preventDefault(); handleAction('cancel-inline-hook'); }
+}
+
+function afterRender(){
+  afterRenderModal();
   if(state._focusPostField){
-    const field = state._focusPostField;
-    state._focusPostField = null;
+    const field=state._focusPostField;
+    state._focusPostField=null;
     requestAnimationFrame(()=>{
-      const el = document.querySelector(`[data-post-field="${field}"]`);
+      const el=document.querySelector(`[data-post-field="${field}"]`);
       if(el){ el.focus(); if(el.select) el.select(); }
     });
   }
-  document.querySelectorAll('[data-gen-brief-post]').forEach(el=>el.addEventListener('click',e=>{
-    e.stopPropagation();
-    const i=Number(el.dataset.genBriefPost);
-    openModal({kind:'post-detail', data:state.activeCalendar.posts[i], briefFlow:true});
-  }));
-  document.querySelectorAll('[data-view-brief]').forEach(el=>el.addEventListener('click',async e=>{
-    e.stopPropagation();
-    const [bid,id]=el.dataset.viewBrief.split('|');
-    let b=(state.briefs||[]).find(x=>x.id===id);
-    if(!b){ const briefs=await Store.listBriefs(bid); b=briefs.find(x=>x.id===id); }
-    if(b) openModal({kind:'view-brief',data:b});
-  }));
-  document.querySelectorAll('[data-delete-brief]').forEach(el=>el.addEventListener('click',e=>{e.stopPropagation(); const [bid,id]=el.dataset.deleteBrief.split('|'); openModal({kind:'confirm',title:'Delete brief?',danger:true,body:'This brief will be permanently removed.',confirmLabel:'Delete',onYes:async()=>{ await Store.deleteBrief(bid,id); state.allBriefs=await Store.listAllBriefs(); closeModal(); showToast('Brief deleted','ok'); }});}));
-  document.querySelectorAll('[data-set-active-variant]').forEach(el=>el.addEventListener('click',e=>{
-    e.stopPropagation();
-    setBriefVariantActive(el.dataset.setActiveVariant);
-  }));
-
-  // Channel selector handlers (in Generate Calendar modal)
-  document.querySelectorAll('[data-chan-step]').forEach(el=>el.addEventListener('click',e=>{
-    e.preventDefault(); e.stopPropagation();
-    const [key,delta]=el.dataset.chanStep.split('|');
-    const cur=Number(state._chanSel[key]||0);
-    const next=Math.max(0,Math.min(999,cur+Number(delta)));
-    state._chanSel[key]=next;
-    render();
-  }));
-  document.querySelectorAll('[data-chan-input]').forEach(el=>el.addEventListener('change',e=>{
-    const key=el.dataset.chanInput;
-    const v=Math.max(0,Math.min(999,Number(el.value)||0));
-    state._chanSel[key]=v;
-    render();
-  }));
-  document.querySelectorAll('[data-chan-toggle]').forEach(el=>el.addEventListener('click',e=>{
-    e.preventDefault();
-    const key=el.dataset.chanToggle;
-    const cur=Number(state._chanSel[key]||0);
-    if(cur>0){ state._chanSel[key]=0; }
-    else { state._chanSel[key]=Math.max(3,Math.round((Number(state._chanDays||30))/10)); }
-    render();
-  }));
-  document.querySelectorAll('[data-chan-action]').forEach(el=>el.addEventListener('click',e=>{
-    e.preventDefault();
-    const a=el.dataset.chanAction;
-    if(a==='clear'){ Object.keys(state._chanSel).forEach(k=>state._chanSel[k]=0); }
-    if(a==='reset'){ state._chanSel=null; }
-    render();
-  }));
-  const chanDaysEl=document.querySelector('[data-chan-days]');
-  if(chanDaysEl) chanDaysEl.addEventListener('change',e=>{
-    state._chanDays=Number(e.target.value);
-    render();
-  });
-
-  // Brief edit field changes — keep state in sync without re-render (preserves cursor)
-  document.querySelectorAll('[data-brief-field]').forEach(el=>el.addEventListener('input',e=>{
-    if(state._briefEdit) state._briefEdit[el.dataset.briefField] = el.value;
-  }));
-  document.querySelectorAll('[data-post-field]').forEach(el=>el.addEventListener('input',e=>{
-    if(state._postEdit){
-      const k = el.dataset.postField;
-      state._postEdit[k] = (k==='evi_score') ? Number(el.value) : el.value;
-    }
-  }));
-
-  // Close download dropdown on outside click
   if(state._dlMenuOpen){
     setTimeout(()=>{
-      const handler = (e)=>{
-        if(!e.target.closest('.dl-wrap')){
-          state._dlMenuOpen = false;
-          document.removeEventListener('click', handler);
+      const handler=(ev)=>{
+        if(!ev.target.closest('.dl-wrap')){
+          state._dlMenuOpen=false;
+          document.removeEventListener('click',handler);
           render();
         }
       };
-      document.addEventListener('click', handler);
-    }, 0);
+      document.addEventListener('click',handler);
+    },0);
   }
+}
 
-  // All Posts table — sort header clicks (delegated so icon/text clicks work)
-  const postsPanel = document.getElementById('all-posts-panel');
-  if(postsPanel){
-    postsPanel.addEventListener('click', e=>{
-      const btn = e.target.closest('[data-post-sort]');
-      if(!btn) return;
-      e.preventDefault();
-      e.stopPropagation();
-      state._postsFilter = state._postsFilter || {};
-      const key = btn.getAttribute('data-post-sort');
-      if(!key) return;
-      if(state._postsFilter.sortKey === key){
-        state._postsFilter.sortDir = state._postsFilter.sortDir === 'asc' ? 'desc' : 'asc';
-      } else {
-        state._postsFilter.sortKey = key;
-        state._postsFilter.sortDir = 'asc';
-      }
-      render();
-    });
-  }
-
-  // All Posts table — dropdown filter changes
-  document.querySelectorAll('[data-post-filter]').forEach(el=>el.addEventListener('change',e=>{
-    state._postsFilter = state._postsFilter || {};
-    const key = el.dataset.postFilter;
-    state._postsFilter[key] = el.value || null;
-    render();
-  }));
-
-  // All Posts table — search box (debounced via input event)
-  const searchEl = document.getElementById('posts-search');
-  if(searchEl){
-    searchEl.addEventListener('input', e=>{
-      state._postsFilter = state._postsFilter || {};
-      state._postsFilter.q = e.target.value;
-      // Debounce by skipping render if user is still typing fast
-      clearTimeout(window._postsSearchTimer);
-      window._postsSearchTimer = setTimeout(()=>render(), 150);
-    });
-  }
+function patchBrandSaveButton(){
+  const btn=document.querySelector('[data-action="save-brand"]');
+  if(!btn) return;
+  const isEdit=!!state.modal?.data?.id;
+  btn.disabled=!!state._saveBrandInFlight;
+  btn.textContent=state._saveBrandInFlight?'Saving…':(isEdit?'Save Changes':'Create Brand');
+  const cancel=btn.parentElement?.querySelector('[data-close-modal]');
+  if(cancel) cancel.disabled=!!state._saveBrandInFlight;
 }
 
 function goto(view){
@@ -2058,33 +3352,86 @@ function goto(view){
   render();
 }
 
-async function setActiveBrand(id){ state.activeBrandId=id||null; state.activeCalendar=null; await loadBrandWorkspace(); }
-async function loadBrandWorkspace(){ if(!state.activeBrandId){ render(); return; } const [cs,bs,t]=await Promise.all([Store.listCalendars(state.activeBrandId),Store.listBriefs(state.activeBrandId),Store.getTrends(state.activeBrandId)]); state.calendars=cs; state.briefs=bs; state.trends=t; if(!state.activeCalendar&&cs.length) state.activeCalendar=cs[0]; render(); }
+async function setActiveBrand(id){
+  state.activeBrandId=id||null;
+  state.activeCalendar=null;
+  if(id) state.view=state.view||'calendar';
+  await loadBrandWorkspace();
+}
+async function loadBrandWorkspace(){
+  if(!state.activeBrandId){ render(); return; }
+  const [cs,bs,t]=await Promise.all([
+    Store.listCalendars(state.activeBrandId),
+    Store.listBriefs(state.activeBrandId),
+    Store.getTrends(state.activeBrandId),
+  ]);
+  state.calendars=cs;
+  state.briefs=bs;
+  state.trends=t;
+  if(!state.activeCalendar&&cs.length) state.activeCalendar=cs[0];
+  _analyticsKey=null;
+  render();
+}
 function openModal(m){
   if(m?.kind==='view-brief' && m.data) m = {...m, data: normalizeBrief(m.data)};
   state.modal=m;
-  render();
+  render({modalOnly:true});
+  if(m?.kind==='brand-form' && m.data && !isBrandProfileComplete(m.data)){
+    requestAnimationFrame(()=>highlightExistingBrandFormGaps(m.data));
+  }
 }
-function closeModal(){
-  state.modal=null;
-  state._chanSel=null; state._chanDays=null;
-  state._briefEdit=null; state._briefEditVariantId=null;
-  state._briefShowRegenerated=false;
-  state._postEdit=null;
-  state._focusPostField=null;
-  state._newPost=null;
-  render();
+
+function highlightExistingBrandFormGaps(brand){
+  const missing=getBrandMissingRequired(brand);
+  if(!missing.length) return;
+  clearBrandFieldErrors();
+  const labels=missing.map(m=>m.label).join(', ');
+  updateBrandFormErrorBanner(
+    brand.id
+      ? `This brand is missing required info: ${labels}. Fill the highlighted fields and save.`
+      : `Please complete: ${labels}.`
+  );
+  const root=document.getElementById('modal-host')||document;
+  missing.forEach(field=>{
+    const el=root.querySelector('#'+field.id)||document.getElementById(field.id);
+    if(el){
+      el.classList.add('field-invalid');
+      el.setAttribute('aria-invalid','true');
+    }
+  });
+  const firstEl=root.querySelector('#'+missing[0].id)||document.getElementById(missing[0].id);
+  if(firstEl) scrollToBrandField(firstEl);
 }
 
 async function handleAction(a){
-  if(a==='new-brand') return openModal({kind:'brand-form',data:{}});
+  if(a==='new-brand'){
+    if(state._saveBrandInFlight) return;
+    if(state.modal?.kind==='brand-form' && !state.modal.data?.id) return;
+    return openModal({kind:'brand-form',data:{_clientDraftId:'b_'+Math.random().toString(36).slice(2,10)}});
+  }
   if(a==='save-brand') return saveBrandFromForm();
-  if(a==='generate-calendar') return openModal({kind:'generate-calendar'});
+  if(a==='generate-calendar'){
+    const brand=state.brands.find(b=>b.id===state.activeBrandId);
+    if(brand && !isBrandProfileComplete(brand)){
+      showToast('Complete required brand profile fields first','err',5000);
+      openModal({kind:'brand-form',data:{...brand}});
+      return;
+    }
+    return openModal({kind:'generate-calendar'});
+  }
   if(a==='run-calendar') return runCalendar();
   if(a==='gen-briefs') return runAutoBriefs();
   if(a==='gen-briefs-all') return runAutoBriefsAll();
   if(a==='brief-from-post') return briefFromCurrentPost();
-  if(a==='fetch-trends') return runFetchTrends();
+  if(a==='fetch-trends'){
+    const brand=state.brands.find(b=>b.id===state.activeBrandId);
+    if(brand && !isBrandProfileComplete(brand)){
+      showToast('Complete required brand profile fields first','err',5000);
+      openModal({kind:'brand-form',data:{...brand}});
+      return;
+    }
+    return runFetchTrends();
+  }
   if(a==='toggle-download-menu'){ state._dlMenuOpen = !state._dlMenuOpen; render(); return; }
   if(a==='export-csv'){ state._dlMenuOpen=false; exportCSV(); return; }
   if(a==='export-md'){ state._dlMenuOpen=false; exportMarkdown(); return; }
@@ -2096,7 +3443,14 @@ async function handleAction(a){
     return;
   }
   if(a==='copy-brief') return copyBriefMarkdown();
-  if(a==='retry-calendar'){ closeModal(); openModal({kind:'generate-calendar'}); return; }
+  if(a==='retry-calendar'){
+    state.modal={kind:'generate-calendar'};
+    state._chanPlan=null;
+    state._chanSel=null;
+    state._chanFormats=null;
+    render({modalOnly:true});
+    return;
+  }
 
   // Brief edit / save / regenerate
   if(a==='edit-brief'){
@@ -2105,22 +3459,22 @@ async function handleAction(a){
     if(!active){ showToast('No active brief to edit','err'); return; }
     state._briefEditVariantId = record.activeVariantId;
     state._briefEdit = {...active};
-    render();
+    render({modalOnly:true});
     return;
   }
-  if(a==='cancel-edit-brief'){ state._briefEdit = null; state._briefEditVariantId = null; render(); return; }
+  if(a==='cancel-edit-brief'){ state._briefEdit = null; state._briefEditVariantId = null; render({modalOnly:true}); return; }
   if(a==='save-brief-edit') return saveBriefEdit();
   if(a==='regenerate-brief') return regenerateBrief();
-  if(a==='toggle-regenerated-copies'){ state._briefShowRegenerated = !state._briefShowRegenerated; render(); return; }
+  if(a==='toggle-regenerated-copies'){ state._briefShowRegenerated = !state._briefShowRegenerated; render({modalOnly:true}); return; }
 
   // Post edit / save / regenerate
   if(a==='edit-post' || a==='edit-post-hook'){
     state._postEdit = applyPostUpdate(state.modal.data, {});
     if(a==='edit-post-hook') state._focusPostField = 'hook';
-    render();
+    render({modalOnly:true});
     return;
   }
-  if(a==='cancel-edit-post'){ state._postEdit = null; render(); return; }
+  if(a==='cancel-edit-post'){ state._postEdit = null; render({modalOnly:true}); return; }
   if(a==='save-post-edit') return savePostEdit();
   if(a==='save-inline-hook') return saveInlineHook(state._inlineHookEditIdx);
   if(a==='cancel-inline-hook'){ state._inlineHookEditIdx = null; state._inlineHookDraft = null; render(); return; }
@@ -2140,60 +3494,233 @@ async function handleAction(a){
   if(a==='save-partial'){
     const m=state.modal;
     if(!m||!m.calendarData) return;
-    const cal={id:'cal_'+Date.now(),title:m.calendarData.title+' (partial)',startDate:m.calendarData.start,days:m.calendarData.days,focus:m.calendarData.focus,posts:m.calendarData.posts};
+    const dir=m.calendarData.content_direction||m.calendarData.focus||'';
+    const cal={id:'cal_'+Date.now(),title:m.calendarData.title+' (partial)',startDate:m.calendarData.start,days:m.calendarData.days,content_direction:dir,focus:dir,posts:m.calendarData.posts};
     try{
       await Store.saveCalendar(m.brandId,cal);
       state.calendars=await Store.listCalendars(m.brandId);
       state.activeCalendar=state.calendars.find(c=>c.id===cal.id)||state.calendars[0];
-      closeModal();
+      clearModalState();
+      render();
       showToast(`Partial saved · ${cal.posts.length} posts`,'info');
     }catch(e){ showToast('Save failed: '+e.message,'err'); }
     return;
   }
-  if(a==='confirm-yes') return state.modal?.onYes&&state.modal.onYes();
+  if(a==='confirm-yes'){
+    const fn=state.modal?.onYes;
+    if(!fn) return;
+    try{
+      await fn();
+    }catch(err){
+      showToast('Action failed: '+(err.message||err),'err');
+      console.error('Confirm action failed:',err);
+    }
+    return;
+  }
+}
+
+const BRAND_REQUIRED_FIELDS=[
+  {id:'f-name', key:'name', label:'Brand Name', message:'Brand name is required'},
+  {id:'f-target_customer_profile', key:'target_customer_profile', label:'Target Customer Profile', message:'Target customer profile is required'},
+  {id:'f-growth_objective', key:'growth_objective', label:'Growth Objective', message:'Growth objective is required'},
+  {id:'f-brand_tone', key:'brand_tone', label:'Brand Tone', message:'Brand tone is required'},
+  {id:'f-brand_personality', key:'brand_personality', label:'Brand Personality', message:'Brand personality is required'},
+  {id:'f-brand_language', key:'brand_language', label:'Brand Language', message:'Brand language is required — select e.g. US English or UK English'},
+];
+
+function getBrandFieldValue(brand,field){
+  if(field.key==='brand_tone')
+    return String(brand.brand_tone||brand.brand_tone_personality||brand.brand_voice||'').trim();
+  return String(brand[field.key]||'').trim();
+}
+
+function getBrandMissingRequired(brand){
+  if(!brand) return [...BRAND_REQUIRED_FIELDS];
+  return BRAND_REQUIRED_FIELDS.filter(f=>!getBrandFieldValue(brand,f));
+}
+
+function isBrandProfileComplete(brand){
+  return getBrandMissingRequired(brand).length===0;
+}
+
+function clearBrandFieldErrors(){
+  document.querySelectorAll('[data-brand-required]').forEach(el=>{
+    el.classList.remove('field-invalid');
+    el.removeAttribute('aria-invalid');
+  });
+  updateBrandFormErrorBanner(null);
+}
+
+function updateBrandFormErrorBanner(message){
+  const panel=document.querySelector('#modal-host .modal-backdrop .panel');
+  if(!panel) return;
+  let banner=panel.querySelector('#brand-form-error-banner');
+  if(!message){
+    if(banner) banner.remove();
+    return;
+  }
+  if(!banner){
+    banner=document.createElement('div');
+    banner.id='brand-form-error-banner';
+    banner.className='brand-form-error-banner';
+    banner.setAttribute('role','alert');
+    const grid=panel.querySelector('.grid');
+    if(grid) panel.insertBefore(banner, grid);
+    else panel.prepend(banner);
+  }
+  banner.textContent=message;
+}
+
+function scrollToBrandField(el){
+  if(!el) return;
+  const scrollParent=el.closest('.overflow-auto')||el.closest('.panel');
+  requestAnimationFrame(()=>{
+    if(scrollParent){
+      const parentRect=scrollParent.getBoundingClientRect();
+      const elRect=el.getBoundingClientRect();
+      const offset=elRect.top-parentRect.top+scrollParent.scrollTop-80;
+      scrollParent.scrollTo({top:Math.max(0,offset),behavior:'smooth'});
+    }else{
+      el.scrollIntoView({behavior:'smooth',block:'center'});
+    }
+    setTimeout(()=>{ try{ el.focus({preventScroll:true}); }catch(_){ el.focus(); } },350);
+  });
+}
+
+function updateCalendarGenerateErrorBanner(message){
+  const panel=document.querySelector('#modal-host .modal-backdrop .panel');
+  if(!panel) return;
+  let banner=panel.querySelector('#calendar-form-error-banner');
+  if(!message){
+    if(banner) banner.remove();
+    return;
+  }
+  if(!banner){
+    banner=document.createElement('div');
+    banner.id='calendar-form-error-banner';
+    banner.className='brand-form-error-banner';
+    banner.setAttribute('role','alert');
+    const space=panel.querySelector('.space-y-4');
+    if(space) space.prepend(banner);
+    else panel.prepend(banner);
+  }
+  banner.textContent=message;
+}
+
+function clearCalendarFieldErrors(){
+  document.querySelectorAll('[data-calendar-required]').forEach(el=>{
+    el.classList.remove('field-invalid');
+    el.removeAttribute('aria-invalid');
+  });
+  updateCalendarGenerateErrorBanner(null);
+}
+
+function validateCalendarGenerateForm(){
+  clearCalendarFieldErrors();
+  const root=document.getElementById('modal-host')||document;
+  const field=CALENDAR_CONTENT_DIRECTION_FIELD;
+  const el=root.querySelector('#'+field.id)||document.getElementById(field.id);
+  const value=String(el?.value||'').trim();
+  if(!value){
+    if(el){
+      el.classList.add('field-invalid');
+      el.setAttribute('aria-invalid','true');
+    }
+    updateCalendarGenerateErrorBanner(field.message);
+    showToast(field.message,'err',5000);
+    if(el) scrollToBrandField(el);
+    return false;
+  }
+  state._calendarContentDirection=value;
+  return true;
+}
+
+function validateBrandForm(){
+  clearBrandFieldErrors();
+  const root=document.getElementById('modal-host')||document;
+  let firstInvalid=null;
+  let missingCount=0;
+  for(const field of BRAND_REQUIRED_FIELDS){
+    const el=root.querySelector('#'+field.id)||document.getElementById(field.id);
+    if(!el){
+      missingCount++;
+      if(!firstInvalid) firstInvalid={el:null,message:'Please complete all required fields.'};
+      continue;
+    }
+    const value=String(el.value||'').trim();
+    if(!value){
+      el.classList.add('field-invalid');
+      el.setAttribute('aria-invalid','true');
+      missingCount++;
+      if(!firstInvalid) firstInvalid={el,message:field.message};
+    }
+  }
+  if(firstInvalid){
+    const msg=missingCount>1
+      ? `Please fill in ${missingCount} required fields. ${firstInvalid.message}`
+      : firstInvalid.message;
+    updateBrandFormErrorBanner(msg);
+    showToast(firstInvalid.message,'err',5000);
+    if(firstInvalid.el) scrollToBrandField(firstInvalid.el);
+    return false;
+  }
+  return true;
 }
 
 async function saveBrandFromForm(){
+  if(state._saveBrandInFlight) return;
+  if(!validateBrandForm()) return;
   const get=id=>document.getElementById(id)?.value?.trim()||'';
+  const modalData=state.modal?.data||{};
   const data={
-    id:state.modal.data.id,
+    id:modalData.id||modalData._clientDraftId,
     name:get('f-name'), website_url:get('f-website_url'), vertical:get('f-vertical'),
     location:get('f-location'), business_model:get('f-business_model'), price_sensitivity_tier:get('f-price_sensitivity_tier'),
     purchase_cycle_length:get('f-purchase_cycle_length'), avg_transaction_value:get('f-avg_transaction_value'),
     time_horizon:get('f-time_horizon'),
     target_customer_profile:get('f-target_customer_profile'), growth_objective:get('f-growth_objective'),
+    brand_tone:get('f-brand_tone'), brand_personality:get('f-brand_personality'), brand_language:get('f-brand_language'),
     product_placement_context:get('f-product_placement_context'), brand_voice:get('f-brand_voice'),
   };
-  if(!data.name){ showToast('Brand name is required','err'); return; }
+  state._saveBrandInFlight=true;
+  patchBrandSaveButton();
   try{
     const saved=await Store.saveBrand(data);
     state.brands=await Store.listBrands();
     if(!state.activeBrandId) state.activeBrandId=saved.id;
-    closeModal();
-    showToast(data.id?'Brand updated':'Brand created','ok');
+    clearModalState();
+    render();
+    showToast(modalData.id?'Brand updated':'Brand created','ok');
   }catch(e){
     showToast('Save failed: '+(e.message||e),'err');
     console.error('Brand save error:',e);
+  }finally{
+    state._saveBrandInFlight=false;
+    if(state.modal?.kind==='brand-form') patchBrandSaveButton();
   }
 }
 
 async function runCalendar(){
-  let brand, title, start, days, focus, channelMix;
+  let brand, title, start, days, contentDirection, chanPlan, fullEntries;
   try {
     brand = state.brands.find(b=>b.id===state.activeBrandId);
     if(!brand){ showToast('No active brand selected','err'); return; }
+    if(!isBrandProfileComplete(brand)){
+      showToast('Complete required brand profile fields before generating a calendar','err',5000);
+      openModal({kind:'brand-form',data:{...brand}});
+      return;
+    }
+    chanPlan=captureChanPlanFromUI();
+    fullEntries=buildChannelEntries(chanPlan);
+    if(!fullEntries.length){
+      showToast('Enable at least one platform and set quantity for a format','err');
+      return;
+    }
+    if(!validateCalendarGenerateForm()) return;
     title = document.getElementById('g-title')?.value?.trim() || (brand.name+' '+monthName(new Date()));
     start = document.getElementById('g-start')?.value || todayISO();
     days = Number(document.getElementById('g-days')?.value || 30);
-    focus = document.getElementById('g-focus')?.value?.trim() || '';
-    // Read channel quotas from selector state
-    channelMix = {};
-    const sel = state._chanSel || {};
-    for(const k of Object.keys(sel)){ if(Number(sel[k])>0) channelMix[k] = Number(sel[k]); }
-    if(!Object.keys(channelMix).length){
-      showToast('Select at least one channel with post quantity > 0','err');
-      return;
-    }
+    contentDirection = state._calendarContentDirection;
   } catch(e){
     showToast('Form read error: '+e.message,'err');
     console.error('Form error:',e);
@@ -2202,70 +3729,63 @@ async function runCalendar(){
 
   closeModal();
 
-  // Build batches — each batch is a date range with proportional channel quotas
-  const totalPosts = Object.values(channelMix).reduce((s,v)=>s+v,0);
+  const totalPosts=getTotalPostsFromPlan(chanPlan);
+  if(totalPosts<=0){
+    showToast('Set at least one post quantity before generating','err');
+    return;
+  }
   const chunkSize=6;
-  const chunks=[];
-  for(let i=0;i<days;i+=chunkSize){
-    const sd=new Date(start); sd.setDate(sd.getDate()+i);
-    const length = Math.min(chunkSize,days-i);
-    // Proportionally allocate channel posts to this batch
-    const ratio = length/days;
-    const batchMix = {};
-    let allocated = 0;
-    for(const [k,v] of Object.entries(channelMix)){
-      const a = Math.round(v*ratio);
-      batchMix[k] = a;
-      allocated += a;
-    }
-    chunks.push({
-      startDay:i+1,
-      endDay:Math.min(i+chunkSize,days),
-      startDate:sd.toISOString().slice(0,10),
-      length,
-      mix: batchMix,
-      total: allocated
-    });
-  }
-  // Reconcile rounding errors so total matches exactly
-  let runningTotal = chunks.reduce((s,c)=>s+c.total,0);
-  let diff = totalPosts - runningTotal;
-  // Distribute diff to last chunks, by largest channel first
-  while(diff !== 0 && chunks.length){
-    const last = chunks[chunks.length-1];
-    const channels = Object.keys(channelMix).sort((a,b)=>channelMix[b]-channelMix[a]);
-    for(const c of channels){
-      if(diff > 0){ last.mix[c]=(last.mix[c]||0)+1; last.total++; diff--; }
-      else if(diff < 0 && (last.mix[c]||0)>0){ last.mix[c]--; last.total--; diff++; }
-      if(diff===0) break;
-    }
-    if(diff!==0) break; // safety
-  }
+  const chunks=buildCalendarBatches(fullEntries,days,start,chunkSize);
+  const batchTotal=chunks.reduce((s,c)=>s+c.total,0);
 
   const log = [];
+  if(batchTotal!==totalPosts)
+    log.push(`▸ Batch allocation: ${batchTotal} slots across ${chunks.length} batches (plan: ${totalPosts})`);
   const setLoading = (body) => {
     state.modal = {kind:'loading', title:'Generating calendar…', body, log: [...log]};
-    render();
+    render({modalOnly:true});
   };
-  setLoading(`Preparing ${chunks.length} batches · ${totalPosts} posts across ${Object.keys(channelMix).length} channels…`);
+  const planSummary=summarizeCalendarGenerationPlan(chanPlan,days,contentDirection);
+  log.push(`▸ Locked plan (from your selections):\n${planSummary.split('\n').map(l=>'  '+l).join('\n')}`);
+  setLoading(`Preparing ${chunks.length} batches…\n${planSummary}`);
+
+  // Load content history for anti-repetition guardrails
+  let priorCalendars = state.calendars || [];
+  let brandBriefs = state.briefs || [];
+  try{
+    if(!priorCalendars.length) priorCalendars = await Store.listCalendars(brand.id);
+    if(!brandBriefs.length) brandBriefs = await Store.listBriefs(brand.id);
+  }catch(_){}
+  const contentHistory = collectContentHistory(priorCalendars, brandBriefs, []);
+  const fullDateSchedule = buildEvenDateSchedule(totalPosts, start, days);
 
   const allPosts=[];
   let chunkIdx=0;
   for(const ch of chunks){
     chunkIdx++;
     if(ch.total===0){ log.push(`▸ Batch ${chunkIdx}/${chunks.length} skipped (0 posts allocated)`); continue; }
-    const mixDesc = Object.entries(ch.mix).filter(([_,v])=>v>0).map(([k,v])=>`${k}:${v}`).join(' · ');
+    const batchPostSlots=buildPostSlotsFromEntries(ch.entries);
+    const mixDesc=ch.entries.map(e=>`${e.platform}:${e.count}×${e.format}`).join(' · ');
     log.push(`▸ Batch ${chunkIdx}/${chunks.length} · ${ch.total} posts · ${mixDesc}`);
     setLoading(`Batch ${chunkIdx} of ${chunks.length} · ${ch.total} posts · days ${ch.startDay}–${ch.endDay}`);
+    const variationPlan = selectVariationPlan(contentHistory, ch.total, allPosts);
+    const batchDateSchedule = fullDateSchedule.slice(allPosts.length, allPosts.length + ch.total);
     const prompt=buildCalendarPrompt(brand,{
-      title,start:ch.startDate,days:ch.length,focus,
+      title,start:ch.startDate,days:ch.length,contentDirection,
+      calendarStart:start,
       batchInfo:`Batch ${chunkIdx} of ${chunks.length} (overall day ${ch.startDay}-${ch.endDay} of ${days})`,
       totalDays:days,
-      channelMix: ch.mix,
-      batchTotal: ch.total
+      channelFormatMix: ch.entries,
+      channelPlan: chanPlan,
+      postSlots: batchPostSlots,
+      batchTotal: ch.total,
+      contentHistory,
+      alreadyGenerated: allPosts,
+      variationPlan,
+      dateSchedule: batchDateSchedule,
     });
     try{
-      const json=await callClaudeJSON(prompt,{max_tokens:16000});
+      const json=await callClaudeJSON(prompt,{max_tokens:16000,temperature:0.65});
       let posts;
       if(Array.isArray(json)) posts = json;
       else if(json.posts && Array.isArray(json.posts)) posts = json.posts;
@@ -2277,71 +3797,117 @@ async function runCalendar(){
         else throw new Error('No posts array found. Got keys: '+Object.keys(json||{}).join(', '));
       }
       if(!posts.length) throw new Error('Empty post array returned by model');
-      log[log.length-1] = `✓ Batch ${chunkIdx}/${chunks.length} — ${posts.length} posts`;
+      applyDateScheduleToPosts(posts, batchDateSchedule, 0);
+      posts=applyBatchPostSlots(posts, ch.entries, batchDateSchedule);
+      if(posts.length!==batchPostSlots.length)
+        log.push(`  ⚠ Post count ${posts.length} vs expected ${batchPostSlots.length} — matched by platform+format`);
+      log.push(`  Validating uniqueness + format-aligned copy for ${posts.length} posts…`);
+      posts=await validateAndFixBatchPosts(posts, brand, contentHistory, allPosts, variationPlan, log);
+      posts=applyBatchPostSlots(posts, ch.entries, batchDateSchedule);
+      for(const p of posts){
+        contentHistory.posts.unshift(p);
+        if(p.hook) contentHistory.hooks.unshift({text:p.hook, hook_type:p.hook_type, hook_category:p.hook_category});
+        if(p.generation_meta) contentHistory.metadata.unshift(p.generation_meta);
+      }
+      log.push(`✓ Batch ${chunkIdx}/${chunks.length} — ${posts.length} posts (validated)`);
       allPosts.push(...posts);
     }catch(e){
       const errMsg = e.message || String(e);
       log[log.length-1] = `✗ Batch ${chunkIdx}/${chunks.length} FAILED — ${errMsg}`;
       console.error('Calendar batch error:',e);
       // Show error modal with details (don't auto-close)
-      state.modal = {kind:'error', title:`Batch ${chunkIdx} failed`, body:errMsg, log:[...log], canRetry:true, partial:allPosts.length, brandId:brand.id, calendarData:{title,start,days,focus,posts:allPosts}};
-      render();
+      state.modal = {kind:'error', title:`Batch ${chunkIdx} failed`, body:errMsg, log:[...log], canRetry:true, partial:allPosts.length, brandId:brand.id, calendarData:{title,start,days,content_direction:contentDirection,focus:contentDirection,channelPlan:chanPlan,posts:allPosts}};
+      render({modalOnly:true});
       return;
     }
   }
 
+  distributePostsAcrossCalendarDays(allPosts, start, days);
+  enforceAllPostFormats(allPosts);
+
+  if(!allPosts.length){
+    const skipped=chunks.filter(c=>c.total===0).length;
+    log.push(`✗ No posts generated (${skipped}/${chunks.length} batches had zero allocation or empty model output)`);
+    state.modal={kind:'error',title:'No posts generated',body:'Every batch was skipped or returned no posts. Try fewer days, more posts per format, or retry.',log:[...log],canRetry:true,brandId:brand.id};
+    render({modalOnly:true});
+    return;
+  }
+
+  const postsPerDay = days > 0 ? (allPosts.length / days).toFixed(1) : '0';
+  log.push(`▸ Dates spread evenly across ${days} days (~${postsPerDay} posts/day)`);
   log.push(`▸ Saving calendar with ${allPosts.length} posts…`);
   setLoading('Saving…');
 
-  const cal={id:'cal_'+Date.now(),title,startDate:start,days,focus,posts:allPosts};
+  const calId='cal_'+Date.now();
+  stampCalendarOnPosts(allPosts,calId);
+  const cal={id:calId,title,startDate:start,days,content_direction:contentDirection,focus:contentDirection,channelPlan:chanPlan,posts:allPosts};
   try{
     await Store.saveCalendar(brand.id,cal);
     state.calendars=await Store.listCalendars(brand.id);
     state.activeCalendar=state.calendars.find(c=>c.id===cal.id)||state.calendars[0];
-    closeModal();
-    showToast(`Calendar generated · ${allPosts.length} posts`,'ok');
+    clearModalState();
+    render();
+    showToast(`Calendar generated · ${allPosts.length} posts. Briefs are not auto-created — use Generate Brief when ready.`,'ok',6000);
   }catch(e){
     state.modal = {kind:'error', title:'Save failed', body:e.message, log:[...log,`✗ Save error: ${e.message}`]};
-    render();
+    render({modalOnly:true});
   }
 }
 
 function buildCalendarPrompt(brand,opts){
   const funnelRatio = brand.business_model === 'B2C' ? '45/30/25' : (brand.business_model === 'B2G' ? '50/35/15' : '40/35/25');
-  const mix = opts.channelMix || {};
-  const mixLines = Object.entries(mix).filter(([_,v])=>v>0).map(([k,v])=>`  - ${k}: EXACTLY ${v} posts`).join('\n');
-  const totalRequired = opts.batchTotal || Object.values(mix).reduce((s,v)=>s+v,0);
+  const formatMix=opts.channelFormatMix||buildChannelEntries(opts.channelPlan||{});
+  const mixLines=formatMix.filter(e=>e.count>0).map(e=>
+    `  - ${e.platform} · ${e.format}: EXACTLY ${e.count} posts`
+  ).join('\n');
+  const totalRequired=opts.batchTotal||formatMix.reduce((s,e)=>s+e.count,0);
+  const guardrails = buildAntiRepetitionSection(opts.contentHistory, opts.alreadyGenerated, opts.variationPlan, opts.dateSchedule, opts.postSlots);
+  const postSlotLines=(opts.postSlots||[]).map((s,i)=>{
+    const ds=(opts.dateSchedule||[])[i];
+    return `  Post ${i+1}: platform="${s.platform}" | format="${s.format}" | date=${ds?.date||''} (${ds?.day||''})`;
+  }).join('\n');
+  const hookCats = GUARDRAIL_HOOK_CATEGORIES.join('|');
+  const dateScheduleLines = (opts.dateSchedule||[]).map((s,i)=>`  Post ${i+1}: ${s.date} (${s.day})`).join('\n');
+  const calStart = opts.calendarStart || opts.start;
 
   return `# ROLE
-You are a McKinsey Senior Partner & Global Lead of Social Media Content Strategy. Your deliverables combine customer-centric strategy, vertical economics, hyper-local intelligence, advanced virality/sentiment analytics, and funnel architecture. They must withstand CMO scrutiny, creative director validation, platform algorithm realities, and procurement/compliance standards.
+You are a Senior Brand Copywriter with 15+ years at Ogilvy, Wieden+Kennedy, Leo Burnett, and DDB — AND a McKinsey-caliber Social Media Strategist. Your deliverables combine senior advertising craft, funnel architecture, platform-native behavior, and measurable business outcomes. They must withstand CMO scrutiny and creative director validation.
+
+${guardrails}
 
 # TASK
 ${opts.batchInfo?`THIS IS ${opts.batchInfo}. Generate posts ONLY for this ${opts.days}-day window of the larger ${opts.totalDays}-day plan.`:`Generate a ${opts.days}-day funnel-mapped, EVI-scored content calendar.`}
+Each post MUST follow its assigned variation row (Angle, Framework, Trigger, Hook Category) — no two posts in this batch share the same combination.
 
-# BRAND BRIEF
-- Name: ${brand.name}
-- Website: ${brand.website_url||'-'}
-- Vertical: ${brand.vertical||'-'}
-- Location: ${brand.location||'-'}
-- Business Model: ${brand.business_model||'B2C'}
-- Price Tier: ${brand.price_sensitivity_tier||'Mid-Market'}
-- Purchase Cycle: ${brand.purchase_cycle_length||'-'}
-- AOV/ACV: ${brand.avg_transaction_value||'-'}
-- Customer Profile: ${brand.target_customer_profile||'-'}
-- Growth Objective: ${brand.growth_objective||'-'}
-- Product Context: ${brand.product_placement_context||'Lead Gen'}
-- Brand Voice: ${brand.brand_voice||'professional, on-brand'}
-- Start Date: ${opts.start}
+${buildBrandContextBlock(brand)}
+
+# CALENDAR RUN
+- Calendar Start: ${calStart}
+- Batch window starts: ${opts.start}
+- Total calendar span: ${opts.totalDays} days
 - Calendar Title: ${opts.title}
-${opts.focus?`- Special Focus: ${opts.focus}`:''}
+
+# DATE DISTRIBUTION (MANDATORY — posts spread evenly across the full ${opts.totalDays}-day calendar)
+Do NOT cluster posts on the first few days or use consecutive dates only. Each post uses its assigned date exactly:
+${dateScheduleLines || '(one date per post in variation assignments above)'}
+
+# CONTENT DIRECTION (MANDATORY — primary creative brief for this calendar)
+Every post must serve this direction while staying faithful to the brand profile above:
+${opts.contentDirection || opts.focus || '(missing — should not happen)'}
 
 # CHANNEL QUOTAS (MANDATORY — exact counts)
 This batch must produce EXACTLY ${totalRequired} total posts, distributed precisely:
 ${mixLines}
 
-These counts are non-negotiable. Each channel produces exactly the number specified. Do not add posts for channels not listed.
+These counts are non-negotiable. Each platform+format line produces exactly the count specified.
 
-# STRATEGY FRAMEWORK (from McKinsey Senior Partner Edition v2.0)
+# POST SLOT ASSIGNMENTS (MANDATORY — output posts[] in this exact order; platform + format are LOCKED per row)
+${postSlotLines || '(see variation assignments)'}
+Do NOT default to Carousel. Match each row's platform AND format exactly.
+
+${buildFormatContentGuidanceFromPlan(opts.channelPlan)||buildFormatContentGuidanceSection(Object.fromEntries(formatMix.map(e=>[e.platform,e.format])))}
+
+# STRATEGY FRAMEWORK
 
 ## A. Funnel Distribution (strict ratio for ${brand.business_model||'B2C'})
 - TOFU (Awareness): ${funnelRatio.split('/')[0]}% — Reach, Saves, Shares, Profile Visits
@@ -2351,13 +3917,15 @@ These counts are non-negotiable. Each channel produces exactly the number specif
 Apply this ratio across the channel mix above.
 
 ## B. Platform-Specific Posting Behavior
-- Instagram: Reels for TOFU, Carousels for MOFU/Educate, Stories for BOFU/Urgency
-- LinkedIn: Document Post / Carousel for MOFU/Educate, Long-form text for thought leadership, Video for BOFU/Social Proof
-- TikTok: Native vertical Reel format, hook in first 1.5s, trending audio + on-screen text
-- YouTube: Long-form for thought leadership; Shorts for TOFU teasers
-- Facebook: Reels + native video, community-tone copy
-- X: Threads for Data-Driven hooks, single posts for Pattern Interrupt
-- Threads: Conversational long-text, replies-driven, lighter B2C/D2C tone
+IGNORE generic format suggestions below when POST SLOT ASSIGNMENTS or PLATFORM FORMATS already specify a format — user selection wins.
+Use POST SLOT ASSIGNMENTS for platform + format per post. Generic hints (only if no slot assigned):
+- Instagram: Reels, Carousels, Stories, Static
+- LinkedIn: Document Post, Carousel, Video, Static
+- TikTok: vertical video
+- YouTube: Shorts or Long-form
+- Facebook: Reels, video, Carousel
+- X: Post, Thread, Video
+- Threads: text, Carousel, video
 
 ## C. Intent Classification (every post tagged)
 - Educate: How-to, frameworks, data insights → Saves, Watch Time
@@ -2366,20 +3934,14 @@ Apply this ratio across the channel mix above.
 - Inspire: Vision, transformation, values → Shares, Follows
 - Convert: Offer, demo, booking, purchase → CTR, Form Submissions
 
-## D. Hook Architecture Matrix
-- Pattern Interrupt ("Stop X. Do Y."): TOFU/Educate → TikTok, Reels, Shorts
-- Curiosity Gap ("The #1 mistake 83% of [role] make..."): TOFU/Inspire → LinkedIn, X, IG
-- Pain-Agitate-Solve: MOFU/Validate → LinkedIn, YouTube
-- Data-Driven ("We analyzed 10K campaigns. Result..."): MOFU/Educate → All
-- Social Proof ("How [client] achieved [result]"): BOFU/Convert → LinkedIn, IG, YT
-- Urgency/Scarcity ("Only 48 hours left..."): BOFU/Convert → Stories, TikTok, FB
+## D. Hook Category Library (use assigned category per post — diversify mechanisms)
+${GUARDRAIL_HOOK_CATEGORIES.map(c=>`- ${c}`).join('\n')}
 
-## E. EVI Scoring (Engagement Velocity Index, 0-10)
+## E. Content Framework Library (use assigned framework per post)
+${GUARDRAIL_FRAMEWORKS.join(', ')}
+
+## F. EVI Scoring (Engagement Velocity Index, 0-10)
 EVI = (Hook Strength + Emotional Resonance + Shareability + Platform Fit) / 4
-- Hook Strength: 9-10 stops scroll; +0.5 for specific number; +0.5 platform-native; -1.0 if >7 words for video
-- Emotional Resonance: 9-10 identity/transformation; 7-8 curiosity/aspiration/FOMO
-- Shareability: 9-10 universal pain or belief validation
-- Platform Fit: how well format matches platform native behavior
 Target EVI ≥ 7.0 for priority pieces.
 
 # OUTPUT REQUIREMENTS
@@ -2388,19 +3950,27 @@ Return a JSON object with this exact structure:
 {
   "posts": [
     {
-      "date": "YYYY-MM-DD (incrementing from ${opts.start} within this batch's date range)",
-      "day": "Mon|Tue|Wed|Thu|Fri|Sat|Sun",
+      "date": "YYYY-MM-DD — MUST match the assigned Date for this post index in DATE DISTRIBUTION",
+      "day": "Mon|Tue|Wed|Thu|Fri|Sat|Sun — must match the calendar weekday for that date",
       "platform": "must be one of the channels in the quota above",
       "funnel_stage": "TOFU|MOFU|BOFU",
       "intent": "Educate|Entertain|Validate|Inspire|Convert",
-      "hook_type": "Pattern Interrupt|Curiosity Gap|Pain-Agitate-Solve|Data-Driven|Social Proof|Urgency/Scarcity",
+      "hook_type": "${hookCats}",
+      "hook_category": "same as hook_type",
+      "content_angle": "Educational|Contrarian|Story|Myth-busting|Behind-the-scenes (match assignment)",
+      "creative_angle": "Educational|Opinion|Trend|Story|Case Study|Data Driven|Psychology|Customer POV|Founder POV|Future Prediction|Myth Busting|Competitive",
+      "content_framework": "PAS|AIDA|BAB|Story Arc|etc (match assignment)",
+      "emotional_trigger": "Curiosity|Aspiration|Fear|Trust|Pride (match assignment)",
+      "perspective": "Founder|Customer|Industry Expert|Observer",
+      "audience_awareness": "Unaware|Problem-aware|Solution-aware",
+      "business_objective": "Awareness|Consideration|Trust Building|Lead Generation|Conversion|Retention",
       "content_id": "YYYYMMDD_PLAT_NN (codes: IG/LI/TT/YT/FB/X/TH for Threads)",
       "format": "Reel|Carousel|Static|Story|Short|Long-form Video|Thread|Live|Document Post",
-      "hook": "production-ready 8-15 word headline, specific to ${brand.name}",
-      "caption_preview": "2-3 line caption max 220 chars, fold-optimized first line",
-      "creative_direction": "concrete shot/slide/layout direction max 200 chars",
+      "hook": "production-ready 8-15 word headline — ${brand.brand_language||'Global English'} spelling/idiom, tone: ${brand.brand_tone||'on-brand'}, personality: ${brand.brand_personality||'on-brand'}, specific to ${brand.name}",
+      "caption_preview": "2-3 line caption max 220 chars, ${brand.brand_language||'Global English'}, fold-optimized first line",
+      "creative_direction": "MUST match assigned format (Reel=video shots, Carousel=slides, Static=image layout, etc.) max 200 chars",
       "visual_specs": "style + color + dimensions max 120 chars",
-      "cta": "exact CTA text",
+      "cta": "exact CTA text — vary CTA style across posts",
       "tracking_url": "https://${brand.website_url||'example.com'}/?utm_source=PLAT&utm_medium=FORMAT&utm_campaign=${slug(opts.title)}_FUNNEL",
       "segment": "which audience segment",
       "evi_score": 7.5,
@@ -2412,17 +3982,22 @@ Return a JSON object with this exact structure:
 
 # CRITICAL RULES
 1. The "posts" array MUST contain EXACTLY ${totalRequired} posts (verify count before responding)
-2. Each platform's count MUST match the quota above exactly
-3. Every hook is production-grade — no placeholders like "[your topic]"
-4. Caption_preview first line is the hook truncated for fold preview
-5. JSON must be syntactically valid: escape internal quotes with \\", escape newlines with \\n
-6. No trailing commas. No markdown code fences. Start response with { and end with }`;
+2. Each post's date and day MUST match its row in DATE DISTRIBUTION / variation assignments (even spread across all ${opts.totalDays} days)
+3. Each post's platform and format MUST match CHANNEL QUOTAS and PLATFORM FORMATS exactly
+4. Each platform's count MUST match the quota above exactly
+5. Hook, caption_preview, and creative_direction MUST match the post's platform format (see FORMAT CONTENT GUIDANCE)
+6. Every hook is production-grade — no placeholders, no banned generic phrases
+7. Each post uses its assigned variation row — distinct angle, framework, trigger, hook category
+8. No two hooks in this batch may share the same opening words or sentence structure
+9. Caption_preview first line complements (not duplicates) the hook
+10. JSON must be syntactically valid: escape internal quotes with \\", escape newlines with \\n
+11. No trailing commas. No markdown code fences. Start response with { and end with }`;
 }
 
 async function runAutoBriefs(){
   if(!state.activeCalendar) return;
   const top=[...state.activeCalendar.posts].sort((a,b)=>(b.evi_score||0)-(a.evi_score||0)).slice(0,4);
-  closeModal(); openModal({kind:'loading',title:'Generating creative briefs…',body:`Building 4 production-grade briefs for top-EVI posts.`});
+  openModal({kind:'loading',title:'Generating creative briefs…',body:`Building 4 production-grade briefs for top-EVI posts.`});
   try{
     let made=0;
     for(const p of top){
@@ -2432,9 +4007,10 @@ async function runAutoBriefs(){
       made++;
     }
     await refreshBriefsState(state.activeBrandId);
-    closeModal(); showToast(`${made} briefs generated`,'ok');
+    clearModalState();
     render();
-  }catch(e){ closeModal(); showToast('Brief generation failed: '+e.message,'err'); }
+    showToast(`${made} briefs generated`,'ok');
+  }catch(e){ clearModalState(); render(); showToast('Brief generation failed: '+e.message,'err'); }
 }
 
 async function runAutoBriefsAll(){
@@ -2452,7 +4028,7 @@ async function runAutoBriefsAll(){
   const log = [];
   const setLoading = (body)=>{
     state.modal = {kind:'loading', title:'Generating all briefs…', body, log:[...log]};
-    render();
+    render({modalOnly:true});
   };
   setLoading(
     skipped
@@ -2472,41 +4048,43 @@ async function runAutoBriefsAll(){
       log[log.length - 1] = `✓ ${i + 1}/${pending.length} · ${label}`;
     }
     await refreshBriefsState(state.activeBrandId);
-    closeModal();
-    showToast(`${made} brief${made === 1 ? '' : 's'} generated`,'ok');
+    clearModalState();
     render();
+    showToast(`${made} brief${made === 1 ? '' : 's'} generated`,'ok');
   }catch(e){
     await refreshBriefsState(state.activeBrandId);
-    closeModal();
+    clearModalState();
+    render();
     showToast(
       made
         ? `Stopped after ${made} brief${made === 1 ? '' : 's'}: ${e.message}`
         : 'Brief generation failed: ' + e.message,
       'err'
     );
-    render();
   }
 }
 
 async function briefFromPost(post, opts={}){
   if(!post||!state.activeBrandId) return;
   const stayOnCalendar=!!opts.stayOnCalendar;
-  if(!stayOnCalendar) closeModal();
-  openModal({kind:'loading',title:'Generating brief…',body:'Building a McKinsey-grade creative brief from this post.'});
+  const {platform,format}=resolvePostFormatForBrief(post);
+  openModal({kind:'loading',title:'Generating brief…',body:`Building brief for ${platform} · ${format} (matches your selected format).`});
   try{
-    const brief=await generateBriefForPost(post);
+    const brief=await generateBriefForPost({...post,platform,format,calendar_id:post.calendar_id||state.activeCalendar?.id});
     brief.content_id=brief.content_id||post.content_id||'';
     const hadBrief = !!findBriefForPost(post);
     const saved = await addBriefVariantForPost(state.activeBrandId, post, brief, 'generated', { activate: !hadBrief });
-    closeModal();
+    await refreshBriefsState(state.activeBrandId);
     if(stayOnCalendar){
+      clearModalState();
       render();
       showToast(hadBrief ? 'New brief copy saved — Set as active in View Brief' : 'Brief generated and set as active','ok');
     }else{
-      openModal({kind:'view-brief',data:saved});
+      state.modal={kind:'view-brief',data:saved};
+      render();
       showToast(hadBrief ? 'New copy added — choose Set as active below' : 'Brief generated','ok');
     }
-  }catch(e){ closeModal(); showToast('Failed: '+e.message,'err'); if(stayOnCalendar) render(); }
+  }catch(e){ clearModalState(); render(); showToast('Failed: '+e.message,'err'); }
 }
 
 async function briefFromCurrentPost(){
@@ -2514,46 +4092,127 @@ async function briefFromCurrentPost(){
   return briefFromPost(state.modal.data, {stayOnCalendar});
 }
 
+async function regenerateBriefScriptOnly(post,brand,partial,reasons){
+  const {platform,format}=resolvePostFormatForBrief(post);
+  const toneCombo={tone_primary:partial.tone_primary||'Direct',tone_secondary:partial.tone_secondary||'Confident'};
+  const prompt=`Rewrite ONLY script_copy and visual_direction for this creative brief. Everything else stays conceptually the same.
+
+LOCKED — DO NOT CHANGE:
+- platform: ${platform}
+- format: ${format}
+- hook: ${partial.hook||post.hook||''}
+
+REJECTION (fix this): ${(reasons||[]).join('; ')}
+
+${getFormatCreativePromptRules(format,platform)}
+
+script_copy rules: ${getBriefScriptGuideForFormat(format,platform,toneCombo)}
+
+Return JSON: { "script_copy": "...", "visual_direction": "..." }`;
+  const json=await callClaudeJSON(prompt,{max_tokens:3000,temperature:0.55});
+  return {
+    ...partial,
+    script_copy:json.script_copy||partial.script_copy,
+    visual_direction:json.visual_direction||partial.visual_direction,
+    platform,
+    format,
+  };
+}
+
 async function generateBriefForPost(post){
   const brand=state.brands.find(b=>b.id===state.activeBrandId);
-  const prompt=`Generate a CMO-ready creative brief.
-
-BRAND: ${brand.name} | ${brand.vertical||''} | ${brand.business_model||''} | ${brand.location||''}
-TARGET: ${brand.target_customer_profile||''}
-
-POST:
-- Content ID: ${post.content_id||''}
-- Date: ${post.date||''}
-- Platform: ${post.platform||''}
-- Format: ${post.format||''}
-- Funnel: ${post.funnel_stage||''}
-- Intent: ${post.intent||''}
-- Hook Type: ${post.hook_type||''}
-- Hook: ${post.hook||''}
-- Caption: ${post.caption_preview||''}
-- CTA: ${post.cta||''}
-- EVI: ${post.evi_score||''}
-
-Return JSON with these EXACT keys (all strings except evi_score, funnel_stage, platform, format which mirror input):
-- content_id, platform, format, funnel_stage, evi_score
-- hook (the headline)
-- objective (one sentence — what this piece must achieve)
-- target_audience (who sees this + their mindset at this funnel moment)
-- core_message (the 1 thing they walk away believing/feeling)
-- script_copy (for video: shot-by-shot with timing; for carousel: slide-by-slide; for static: headline+body+CTA. Be detailed.)
-- visual_direction (style, color hex if relevant, text overlays font/size/position, b-roll, talent direction)
-- audio_direction (music genre+tempo+licensing source, voice tone+speed, SFX)
-- technical_specs (dimensions like 1080x1920, format MP4/JPG, max file size, captions WCAG-compliant burned-in)
-- cta_block (primary CTA text + secondary engagement prompt + destination URL with UTM)
-- compliance (disclosures required, claims verified, brand guidelines, accessibility)`;
-  const json=await callClaudeJSON(prompt,{max_tokens:4096});
-  return {
-    content_id:post.content_id,platform:post.platform,format:post.format,funnel_stage:post.funnel_stage,
-    evi_score:post.evi_score,hook:json.hook||post.hook,
-    objective:json.objective,target_audience:json.target_audience,core_message:json.core_message,
-    script_copy:json.script_copy,visual_direction:json.visual_direction,audio_direction:json.audio_direction,
-    technical_specs:json.technical_specs,cta_block:json.cta_block,compliance:json.compliance,
+  const {platform,format}=resolvePostFormatForBrief(post);
+  const lockedPost={
+    ...post,
+    platform,
+    format,
+    calendar_id:post.calendar_id||state.activeCalendar?.id||'',
   };
+  lockPostSlotFields(lockedPost);
+
+  let briefs=state.briefs||[];
+  try{ if(!briefs.length) briefs=await Store.listBriefs(state.activeBrandId); }catch(_){}
+  const history=collectContentHistory(state.calendars||[], briefs, state.activeCalendar?.posts||[]);
+  const toneCombo=selectToneCombo(history);
+  const recentScripts=(history.scripts||[]).slice(0,10).map((s,i)=>`${i+1}. [${s.tone_primary||'?'}+${s.tone_secondary||'?'}] ${String(s.text).slice(0,120)}…`).join('\n')||'(none)';
+  const recentHooks=(history.hooks||[]).slice(0,20).map(h=>h.text).filter(Boolean);
+  const scriptGuide=getBriefScriptGuideForFormat(format,platform,toneCombo);
+
+  const prompt=`You are a Senior Brand Copywriter. Generate a CMO-ready creative brief.
+
+# LOCKED DELIVERABLE (user selected — non-negotiable)
+Platform: ${platform}
+Format: ${format}
+script_copy MUST be written ONLY for ${format} on ${platform}. Never default to Carousel or slides unless format is Carousel or Document Post.
+
+${getFormatCreativePromptRules(format,platform)}
+
+## script_copy (MANDATORY structure)
+${scriptGuide}
+
+## Script tone
+Primary: ${toneCombo.tone_primary} | Secondary: ${toneCombo.tone_secondary}
+Do not repeat recent script structures:
+${recentScripts}
+
+## Brand
+${buildBrandContextBlock(brand)}
+
+## Post context
+- Content ID: ${lockedPost.content_id||''}
+- Calendar ID: ${lockedPost.calendar_id||''}
+- Date: ${lockedPost.date||''}
+- Funnel: ${lockedPost.funnel_stage||''}
+- Hook: ${lockedPost.hook||''}
+- Caption: ${lockedPost.caption_preview||''}
+- CTA: ${lockedPost.cta||''}
+
+Avoid hooks similar to: ${recentHooks.slice(0,8).map(h=>`"${h}"`).join(', ')||'none'}
+
+Return JSON with EXACT keys:
+content_id, platform, format, funnel_stage, evi_score, hook, objective, target_audience, core_message,
+script_copy, visual_direction, audio_direction, technical_specs, cta_block, compliance, tone_primary, tone_secondary
+
+platform MUST be "${platform}". format MUST be "${format}".
+script_copy and visual_direction MUST match ${format} — NOT slides unless format is Carousel/Document Post.`;
+
+  const json=await callClaudeJSON(prompt,{max_tokens:4096,temperature:0.55});
+  let result={
+    content_id:lockedPost.content_id,
+    calendar_id:lockedPost.calendar_id,
+    platform,
+    format,
+    funnel_stage:lockedPost.funnel_stage,
+    evi_score:lockedPost.evi_score,
+    hook:json.hook||lockedPost.hook,
+    objective:json.objective,
+    target_audience:json.target_audience,
+    core_message:json.core_message,
+    script_copy:json.script_copy,
+    visual_direction:json.visual_direction,
+    audio_direction:json.audio_direction,
+    technical_specs:json.technical_specs,
+    cta_block:json.cta_block,
+    compliance:json.compliance,
+    tone_primary:json.tone_primary||toneCombo.tone_primary,
+    tone_secondary:json.tone_secondary||toneCombo.tone_secondary,
+  };
+  result.platform=platform;
+  result.format=format;
+
+  let scriptRetries=0;
+  while(scriptRetries<2){
+    const scriptIssues=getBriefFormatMismatchReasons(result);
+    if(!scriptIssues.length) break;
+    try{
+      result=await regenerateBriefScriptOnly(lockedPost,brand,result,scriptIssues);
+      result.platform=platform;
+      result.format=format;
+    }catch(_){ break; }
+    scriptRetries++;
+  }
+  result.generation_meta=buildGenerationMeta({...lockedPost,...result},{framework:lockedPost.content_framework,angle:lockedPost.content_angle});
+  return result;
 }
 
 /* ===== BRIEF VARIANTS (save / regenerate / set active) ===== */
@@ -2573,7 +4232,8 @@ async function persistBriefRecord(brandId, record){
 
 async function addBriefVariantForPost(brandId, post, content, source, { activate = false } = {}){
   const contentId = content.content_id || post?.content_id || '';
-  const lookup = post || { content_id: contentId, platform: content.platform, hook: content.hook, format: content.format, funnel_stage: content.funnel_stage };
+  const calendarId = content.calendar_id || post?.calendar_id || state.activeCalendar?.id || '';
+  const lookup = post || { content_id: contentId, calendar_id: calendarId, platform: content.platform, hook: content.hook, format: content.format, funnel_stage: content.funnel_stage };
   let record = findBriefForPost(lookup);
   const variant = {
     id: newVariantId(),
@@ -2585,6 +4245,7 @@ async function addBriefVariantForPost(brandId, post, content, source, { activate
     record = normalizeBrief(record);
     record = {
       ...record,
+      calendar_id: calendarId || record.calendar_id,
       variants: [...record.variants, variant],
       activeVariantId: activate ? variant.id : record.activeVariantId,
       savedAt: Date.now(),
@@ -2595,6 +4256,7 @@ async function addBriefVariantForPost(brandId, post, content, source, { activate
       ...extractBriefContent(content),
       brandId,
       content_id: contentId,
+      calendar_id: calendarId,
       variants: [variant],
       activeVariantId: variant.id,
       createdAt: Date.now(),
@@ -2620,7 +4282,7 @@ async function setBriefVariantActive(variantId){
     const saved = await persistBriefRecord(current.brandId, updated);
     state._briefEdit = null;
     state.modal = { kind:'view-brief', data: saved };
-    render();
+    render({modalOnly:true});
     showToast('Active brief updated · exports will use this copy','ok');
   }catch(e){ showToast('Could not set active: '+e.message,'err'); }
 }
@@ -2651,7 +4313,7 @@ async function saveBriefEdit(){
     state._briefEdit = null;
     state._briefEditVariantId = null;
     state.modal = { kind:'view-brief', data: saved };
-    render();
+    render({modalOnly:true});
     showToast('Brief saved — same copy updated','ok');
   }catch(e){ showToast('Save failed: '+e.message,'err'); console.error(e); }
 }
@@ -2663,12 +4325,12 @@ async function regenerateBrief(){
   if(!brand){ showToast('Source brand not found','err'); return; }
   const brandId = current.brandId;
   const sourcePost = {
-    content_id: current.content_id, platform: current.platform, format: current.format,
+    content_id: current.content_id, calendar_id: current.calendar_id, platform: current.platform, format: current.format,
     funnel_stage: current.funnel_stage, intent: current.intent || '', hook_type: current.hook_type || '',
     hook: current.hook, caption_preview: current.caption_preview || current.hook,
     cta: current.cta_block || '', evi_score: current.evi_score, date: current.date || '',
+    content_framework: current.content_framework, content_angle: current.content_angle,
   };
-  closeModal();
   openModal({kind:'loading',title:'Regenerating brief…',body:'Building a fresh copy — your current active brief stays until you switch.',log:[]});
   try{
     const prevActive = state.activeBrandId;
@@ -2677,12 +4339,12 @@ async function regenerateBrief(){
     state.activeBrandId = prevActive;
     const saved = await addBriefVariantForPost(brandId, sourcePost, fresh, 'regenerated', { activate: false });
     state._briefEdit = null;
-    closeModal();
     state.modal = { kind:'view-brief', data: saved };
-    render();
+    render({modalOnly:true});
     showToast('New brief copy added — Set as active to use it','ok');
   }catch(e){
-    closeModal();
+    clearModalState();
+    render();
     showToast('Regenerate failed: '+e.message,'err');
     console.error(e);
   }
@@ -2793,13 +4455,20 @@ async function regeneratePost(){
   const cal = state.activeCalendar;
   const brand = state.brands.find(b=>b.id===cal.brandId);
   if(!brand){ showToast('Brand not found','err'); return; }
-  openModal({kind:'loading',title:'Regenerating post…',body:'Building a fresh version with the same brand + funnel context.',log:[]});
+  openModal({kind:'loading',title:'Regenerating post…',body:'Building a fresh version with uniqueness guardrails.',log:[]});
   try{
-    const prompt = `You are a McKinsey Senior Partner of Social Media Content Strategy. Regenerate a single content post.
+    let briefs=state.briefs||[];
+    try{ if(!briefs.length) briefs=await Store.listBriefs(cal.brandId); }catch(_){}
+    const history=collectContentHistory(state.calendars||[], briefs, cal.posts.filter(p=>p!==current));
+    const assignment=selectVariationPlan(history,1)[0];
+    const siblingHooks=cal.posts.filter(p=>p!==current).map(p=>p.hook).filter(Boolean).slice(0,15);
+    const prompt = `You are a Senior Brand Copywriter (15+ years, Ogilvy/W+K/Leo Burnett/DDB). Regenerate a single content post with a strategically distinct angle.
 
 BRAND: ${brand.name} | ${brand.vertical||''} | ${brand.business_model||''} | ${brand.location||''}
 TARGET: ${brand.target_customer_profile||''}
-BRAND VOICE: ${brand.brand_voice||''}
+BRAND TONE: ${brand.brand_tone||brand.brand_tone_personality||brand.brand_voice||''}
+BRAND PERSONALITY: ${brand.brand_personality||''}
+LANGUAGE: ${brand.brand_language||'Global English'} (mandatory — spelling, idioms, cultural tone)
 
 KEEP THESE LOCKED:
 - Date: ${current.date}
@@ -2808,20 +4477,32 @@ KEEP THESE LOCKED:
 - Funnel Stage: ${current.funnel_stage}
 - Content ID: ${current.content_id}
 
-EXPLORE A FRESH ANGLE for these (do not repeat the previous version's angle):
-PREVIOUS HOOK: "${current.hook||''}"
-PREVIOUS CAPTION: "${current.caption_preview||''}"
+MANDATORY VARIATION (do not reuse previous combo):
+- Content Angle: ${assignment.angle}
+- Creative Angle: ${assignment.creative_angle}
+- Framework: ${assignment.framework}
+- Emotional Trigger: ${assignment.emotional_trigger}
+- Hook Category: ${assignment.hook_category}
+- Perspective: ${assignment.perspective}
+- Business Objective: ${assignment.business_objective}
+
+PREVIOUS (do NOT repeat angle, structure, or phrasing):
+- Hook: "${current.hook||''}"
+- Caption: "${current.caption_preview||''}"
+
+OTHER CALENDAR HOOKS TO AVOID:
+${siblingHooks.map((h,i)=>`${i+1}. "${h}"`).join('\n')||'(none)'}
+
+BANNED: generic fluff, clichés, "Did you know", "Here are 3 ways", "Most businesses".
 
 Return JSON with these EXACT keys:
-hook, caption_preview, intent, hook_type, creative_direction, visual_specs, cta, segment, evi_score, sentiment, status
-
-Be specific, on-brand, production-ready.`;
-    const json = await callClaudeJSON(prompt, {max_tokens: 2000});
-    const updated = applyPostUpdate(current, {
+hook, caption_preview, intent, hook_type, hook_category, content_angle, creative_angle, content_framework, emotional_trigger, perspective, audience_awareness, business_objective, creative_direction, visual_specs, cta, segment, evi_score, sentiment, status`;
+    const json = await callClaudeJSON(prompt, {max_tokens: 2500, temperature: 0.75});
+    let updated = applyPostUpdate(current, {
       hook: json.hook || current.hook,
       caption_preview: json.caption_preview || current.caption_preview,
       intent: json.intent || current.intent,
-      hook_type: json.hook_type || current.hook_type,
+      hook_type: json.hook_category || json.hook_type || assignment.hook_category,
       creative_direction: json.creative_direction || current.creative_direction,
       visual_specs: json.visual_specs || current.visual_specs,
       cta: json.cta || current.cta,
@@ -2830,17 +4511,31 @@ Be specific, on-brand, production-ready.`;
       sentiment: json.sentiment || current.sentiment,
       status: json.status || current.status,
     });
+    updated.hook_category = json.hook_category || json.hook_type || assignment.hook_category;
+    updated.content_angle = json.content_angle || assignment.angle;
+    updated.creative_angle = json.creative_angle || assignment.creative_angle;
+    updated.content_framework = json.content_framework || assignment.framework;
+    updated.emotional_trigger = json.emotional_trigger || assignment.emotional_trigger;
+    updated.perspective = json.perspective || assignment.perspective;
+    updated.audience_awareness = json.audience_awareness || assignment.audience_awareness;
+    updated.business_objective = json.business_objective || assignment.business_objective;
+    updated.generation_meta = buildGenerationMeta(updated, assignment);
+
+    const check = validatePostContent(updated, history, cal.posts.filter(p=>p!==current));
+    if(!check.valid){
+      updated = await regenerateCalendarPost(updated, brand, history, assignment, check.reasons);
+    }
     const idx = cal.posts.findIndex(p=>p===current || (p.content_id && p.content_id===current.content_id));
     if(idx !== -1) cal.posts[idx] = updated;
     await Store.saveCalendar(cal.brandId, cal);
     state.calendars = await Store.listCalendars(cal.brandId);
     state.activeCalendar = state.calendars.find(c=>c.id===cal.id) || cal;
-    closeModal();
     state.modal = {kind:'post-detail', data: updated};
-    render();
+    render({modalOnly:true});
     showToast('Post regenerated','ok');
   }catch(e){
-    closeModal();
+    clearModalState();
+    render();
     showToast('Regenerate failed: '+e.message,'err');
     console.error(e);
   }
@@ -2858,6 +4553,9 @@ VERTICAL: ${brand.vertical||'-'}
 LOCATION: ${brand.location||'-'}
 BUSINESS MODEL: ${brand.business_model||'-'}
 TARGET CUSTOMER: ${brand.target_customer_profile||'-'}
+BRAND TONE: ${brand.brand_tone||brand.brand_tone_personality||brand.brand_voice||'-'}
+BRAND PERSONALITY: ${brand.brand_personality||'-'}
+BRAND LANGUAGE: ${brand.brand_language||'Global English'}
 
 Search the web for:
 1. Latest 2025-2026 trends in ${brand.vertical||'this industry'}
@@ -2880,8 +4578,10 @@ Return JSON:
     const json=tolerantJSONParse(txt);
     await Store.saveTrends(brand.id,json);
     state.trends=await Store.getTrends(brand.id);
-    closeModal(); showToast('Industry intel refreshed','ok');
-  }catch(e){ closeModal(); showToast('Fetch failed: '+e.message,'err'); console.error('Trends error:',e); }
+    clearModalState();
+    render();
+    showToast('Industry intel refreshed','ok');
+  }catch(e){ clearModalState(); render(); showToast('Fetch failed: '+e.message,'err'); console.error('Trends error:',e); }
 }
 
 // Get the same filtered+sorted post set the user sees in the All Posts table
@@ -3293,14 +4993,17 @@ function downloadBlob(blob,filename){const url=URL.createObjectURL(blob); const 
 
 /* ========= INIT ========= */
 (async function init(){
+  ensureToastHost();
+  bindAppHandlersOnce();
   try{
     state.brands=await Store.listBrands();
     state.allBriefs=await Store.listAllBriefs();
     if(state.brands.length) state.activeBrandId=state.brands[0].id;
     if(state.activeBrandId) await loadBrandWorkspace();
+    else renderSync();
   }catch(e){
     console.error('Init failed:',e);
     showToast('Init error: '+e.message,'err');
+    renderSync();
   }
-  render();
 })();

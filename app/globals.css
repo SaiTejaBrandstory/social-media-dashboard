@@ -72,6 +72,22 @@ body{margin:0}
 .input:focus,.select:focus,.textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .textarea{font-family:inherit;resize:vertical;min-height:70px}
 .label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3);font-weight:600;margin-bottom:6px;display:block}
+.req-asterisk{color:var(--bad);margin-left:2px;font-weight:700}
+.input.field-invalid,.textarea.field-invalid,.select.field-invalid{
+  border-color:var(--bad)!important;
+  box-shadow:0 0 0 3px var(--bad-soft)!important;
+}
+.input.field-invalid:focus,.textarea.field-invalid:focus,.select.field-invalid:focus{
+  border-color:var(--bad)!important;
+  box-shadow:0 0 0 3px rgba(220,38,38,.25)!important;
+}
+.brand-form-error-banner{
+  padding:10px 12px;margin-bottom:12px;border-radius:8px;
+  background:var(--bad-soft);border:1px solid var(--bad);color:var(--bad);
+  font-size:12.5px;font-weight:600;line-height:1.4;
+}
+.brand-card-incomplete{border-color:var(--bad-soft)!important;box-shadow:0 0 0 1px var(--bad-soft)}
+.brand-pill-incomplete{background:var(--bad-soft)!important;color:var(--bad)!important;border:1px solid var(--bad)}
 
 /* Buttons */
 .btn{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--line);background:#ffffff;color:var(--ink);transition:all .15s;box-shadow:var(--shadow-sm)}
@@ -289,8 +305,27 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 }
 .stepper-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .stepper-input::-webkit-outer-spin-button,
-.stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.stepper-input { -moz-appearance: textfield; }
+.stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+.stepper-input { -moz-appearance: textfield; appearance: textfield; }
+
+.chan-format-select{
+  width:auto;min-width:108px;max-width:140px;padding:6px 8px;font-size:11.5px;font-weight:500;
+  flex-shrink:0;
+}
+.channel-row-active .chan-format-select{border-color:var(--accent-soft2);background:#fff}
+.chan-format-lines{
+  margin-left:2rem;
+  padding-left:0.75rem;
+  border-left:2px solid var(--line2);
+}
+.chan-remove-fmt{
+  padding:2px 8px!important;
+  min-width:28px;
+  font-size:14px;
+  line-height:1;
+  color:var(--ink3);
+}
+.chan-remove-fmt:hover:not(:disabled){color:var(--bad);background:var(--bad-soft)}
 
 .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 
