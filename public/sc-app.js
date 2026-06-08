@@ -1062,7 +1062,6 @@ function renderCalendarDetailMain(c,brand){
               </div>
             ` : ''}
           </div>
-          <button class="btn primary" data-action="gen-briefs">${ICONS.spark} Auto-Brief Top 4</button>
         </div>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1823,7 +1822,7 @@ function renderBriefsView(){
   if(!all.length){
     return `<div class="panel empty">
       <div class="text-[14px] font-semibold mb-1 text-[var(--ink)]">No briefs yet</div>
-      <div class="text-[12px] mb-4">Generate a calendar, then use <b class="text-[var(--ink2)]">Generate All Briefs</b> (or Auto-Brief Top 4) on it to populate this library.</div>
+      <div class="text-[12px] mb-4">Generate a calendar, then use <b class="text-[var(--ink2)]">Generate All Briefs</b> on a post to populate this library.</div>
     </div>`;
   }
   const byBrand={};
@@ -3472,7 +3471,6 @@ async function handleAction(a){
     return openModal({kind:'generate-calendar'});
   }
   if(a==='run-calendar') return runCalendar();
-  if(a==='gen-briefs') return runAutoBriefs();
   if(a==='gen-briefs-all') return runAutoBriefsAll();
   if(a==='brief-from-post') return briefFromCurrentPost();
   if(a==='fetch-trends'){
@@ -4044,25 +4042,6 @@ Return a JSON object with this exact structure:
 9. Caption_preview first line complements (not duplicates) the hook
 10. JSON must be syntactically valid: escape internal quotes with \\", escape newlines with \\n
 11. No trailing commas. No markdown code fences. Start response with { and end with }`;
-}
-
-async function runAutoBriefs(){
-  if(!state.activeCalendar) return;
-  const top=[...state.activeCalendar.posts].sort((a,b)=>(b.evi_score||0)-(a.evi_score||0)).slice(0,4);
-  openModal({kind:'loading',title:'Generating creative briefs…',body:`Building 4 production-grade briefs for top-EVI posts.`});
-  try{
-    let made=0;
-    for(const p of top){
-      const brief=await generateBriefForPost(p);
-      const hadBrief = !!findBriefForPost(p);
-      await addBriefVariantForPost(state.activeBrandId, p, brief, 'generated', { activate: !hadBrief });
-      made++;
-    }
-    await refreshBriefsState(state.activeBrandId);
-    clearModalState();
-    render();
-    showToast(`${made} briefs generated`,'ok');
-  }catch(e){ clearModalState(); render(); showToast('Brief generation failed: '+e.message,'err'); }
 }
 
 async function runAutoBriefsAll(){
