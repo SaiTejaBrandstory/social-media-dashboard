@@ -2538,26 +2538,106 @@ ${lines.join('\n')}
 For each post: hook, caption_preview, and creative_direction MUST read like the format above (Reel ≠ Carousel ≠ Static ≠ Thread). Do not write carousel slide copy for a Reel or a blog-style caption for a Short.`;
 }
 
+const GENERATE_CAL_CHANNELS=[
+  {key:'Instagram', icon:'📷', color:'#e1306c'},
+  {key:'Facebook',  icon:'👤', color:'#1877f2'},
+  {key:'LinkedIn',  icon:'💼', color:'#0a66c2'},
+  {key:'YouTube',   icon:'▶',  color:'#ff0000'},
+  {key:'TikTok',    icon:'♪',  color:'#fff'},
+  {key:'X',         icon:'𝕏',  color:'#fff'},
+  {key:'Threads',   icon:'@',  color:'#fff'},
+];
+
+function renderGenerateCalendarChannelRow(c,plan){
+  const platformTotal=platformTotalFromPlan(plan,c.key);
+  const active=platformTotal>0;
+  return `
+  <div class="rounded-lg p-2 ${active?'channel-row-active':'channel-row'}" data-chan-row="${c.key}">
+    <div class="flex items-center gap-3">
+      <label class="flex items-center gap-2.5 flex-1 cursor-pointer min-w-0" data-chan-toggle="${c.key}">
+        <span class="custom-checkbox ${active?'checked':''}">
+          ${active?'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5"><path d="M5 12l5 5L20 7"/></svg>':''}
+        </span>
+        <span class="w-6 h-6 rounded-md flex items-center justify-center text-[12px] shrink-0" style="background:${c.color};color:${c.key==='TikTok'||c.key==='X'||c.key==='Threads'?'#000':'#fff'}">${c.icon}</span>
+        <span class="text-[13px] font-medium ${active?'text-[var(--ink)]':'text-[var(--ink2)]'}">${c.key}</span>
+        ${active?`<span class="text-[11px] text-[var(--ink3)] mono ml-1">${platformTotal} posts</span>`:''}
+      </label>
+    </div>
+    ${active?renderChanFormatLines(c.key,plan):''}
+  </div>`;
+}
+
+function renderGenerateCalendarChannelList(plan){
+  return GENERATE_CAL_CHANNELS.map(c=>renderGenerateCalendarChannelRow(c,plan)).join('');
+}
+
+function getGenerateCalendarPlanStats(plan,days){
+  const total=getTotalPostsFromPlan(plan);
+  const formatRows=buildChannelEntries(plan).length;
+  return {
+    total,
+    perDay:days>0?(total/days).toFixed(1):'0',
+    formatRows,
+    activePlatforms:activePlatformCountFromPlan(plan),
+  };
+}
+
+function renderGenerateCalendarStatsGrid(plan,days){
+  const s=getGenerateCalendarPlanStats(plan,days);
+  return `
+  <div class="grid grid-cols-3 gap-2">
+    <div class="panel2 p-3 text-center">
+      <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Total Posts</div>
+      <div class="text-[20px] font-bold mono grad-text">${s.total}</div>
+    </div>
+    <div class="panel2 p-3 text-center">
+      <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Per Day Avg</div>
+      <div class="text-[20px] font-bold mono ${s.total>0?'text-[var(--ink)]':'text-[var(--ink3)]'}">${s.perDay}</div>
+    </div>
+    <div class="panel2 p-3 text-center">
+      <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Format lines</div>
+      <div class="text-[20px] font-bold mono ${s.formatRows>0?'text-[var(--accent2)]':'text-[var(--ink3)]'}">${s.formatRows}</div>
+    </div>
+  </div>`;
+}
+
+function renderGenerateCalendarSummaryBox(plan,days){
+  const s=getGenerateCalendarPlanStats(plan,days);
+  if(s.total===0){
+    return `<div class="panel2 p-3 text-[11.5px]" style="border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.06);color:#fbbf24">⚠ Select at least one channel and set post quantity before generating.</div>`;
+  }
+  return `<div class="panel2 p-3 text-[11.5px] text-[var(--ink2)]">
+    Will generate <b class="text-[var(--ink)]">${s.total} posts</b> across <b class="text-[var(--ink)]">${s.activePlatforms} platforms</b> and <b class="text-[var(--ink)]">${s.formatRows} format lines</b>, spread over <b class="text-[var(--ink)]">${days} days</b>. Each row’s quantity uses that format (e.g. Reels + Carousels on the same platform). Takes ~${Math.ceil(s.total/12)*30}–${Math.ceil(s.total/12)*60}s.
+  </div>`;
+}
+
+/** Update channel picker without re-rendering the whole modal (preserves scroll + form fields). */
+function patchGenerateCalendarChannelUI(){
+  if(state.modal?.kind!=='generate-calendar'){ render({modalOnly:true}); return; }
+  const root=document.getElementById('modal-host');
+  if(!root) return;
+  const listEl=root.querySelector('[data-g-chan-list]');
+  if(!listEl){ render({modalOnly:true}); return; }
+  const plan=ensureChanPlanState();
+  const days=Number(state._chanDays||root.querySelector('#g-days')?.value||30);
+  listEl.innerHTML=renderGenerateCalendarChannelList(plan);
+  const statsEl=root.querySelector('[data-g-chan-stats]');
+  if(statsEl) statsEl.innerHTML=renderGenerateCalendarStatsGrid(plan,days);
+  const summaryEl=root.querySelector('[data-g-chan-summary]');
+  if(summaryEl) summaryEl.innerHTML=renderGenerateCalendarSummaryBox(plan,days);
+  const runBtn=root.querySelector('[data-action="run-calendar"]');
+  if(runBtn) runBtn.disabled=getTotalPostsFromPlan(plan)===0;
+}
+
 function renderGenerateCalendarModal(m){
   const brand=state.brands.find(b=>b.id===state.activeBrandId);
   const reqLabel=(text)=>`<label class="label">${esc(text)}<span class="req-asterisk" aria-hidden="true">*</span></label>`;
   const plan=ensureChanPlanState();
-  const channels = [
-    {key:'Instagram', icon:'📷', color:'#e1306c'},
-    {key:'Facebook',  icon:'👤', color:'#1877f2'},
-    {key:'LinkedIn',  icon:'💼', color:'#0a66c2'},
-    {key:'YouTube',   icon:'▶',  color:'#ff0000'},
-    {key:'TikTok',    icon:'♪',  color:'#fff'},
-    {key:'X',         icon:'𝕏',  color:'#fff'},
-    {key:'Threads',   icon:'@',  color:'#fff'},
-  ];
-  const total=getTotalPostsFromPlan(plan);
   const days = Number(state._chanDays||30);
-  const perDay = days>0?(total/days).toFixed(1):'0';
-  const formatRows=buildChannelEntries(plan).length;
+  const stats=getGenerateCalendarPlanStats(plan,days);
 
   return `<div class="modal-backdrop" data-close-modal>
-    <div class="panel p-6 w-full max-w-3xl max-h-[92vh] overflow-auto scroll" onclick="event.stopPropagation()">
+    <div class="panel p-6 w-full max-w-3xl max-h-[92vh] overflow-auto scroll" data-g-cal-scroll onclick="event.stopPropagation()">
       <div class="flex items-center justify-between mb-4">
         <div>
           <div class="text-[16px] font-semibold">Generate calendar</div>
@@ -2592,55 +2672,27 @@ function renderGenerateCalendarModal(m){
               <button class="btn ghost" style="padding:4px 9px;font-size:11px" data-chan-action="clear">Clear all</button>
             </div>
           </div>
-          <div class="panel2 p-3 space-y-1.5">
-            ${channels.map(c=>{
-              const platformTotal=platformTotalFromPlan(plan,c.key);
-              const active=platformTotal>0;
-              return `
-              <div class="rounded-lg p-2 ${active?'channel-row-active':'channel-row'}" data-chan-row="${c.key}">
-                <div class="flex items-center gap-3">
-                  <label class="flex items-center gap-2.5 flex-1 cursor-pointer min-w-0" data-chan-toggle="${c.key}">
-                    <span class="custom-checkbox ${active?'checked':''}">
-                      ${active?'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5"><path d="M5 12l5 5L20 7"/></svg>':''}
-                    </span>
-                    <span class="w-6 h-6 rounded-md flex items-center justify-center text-[12px] shrink-0" style="background:${c.color};color:${c.key==='TikTok'||c.key==='X'||c.key==='Threads'?'#000':'#fff'}">${c.icon}</span>
-                    <span class="text-[13px] font-medium ${active?'text-[var(--ink)]':'text-[var(--ink2)]'}">${c.key}</span>
-                    ${active?`<span class="text-[11px] text-[var(--ink3)] mono ml-1">${platformTotal} posts</span>`:''}
-                  </label>
-                </div>
-                ${active?renderChanFormatLines(c.key,plan):''}
-              </div>`;
-            }).join('')}
+          <div class="panel2 p-3 space-y-1.5" data-g-chan-list>
+            ${renderGenerateCalendarChannelList(plan)}
           </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-2">
-          <div class="panel2 p-3 text-center">
-            <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Total Posts</div>
-            <div class="text-[20px] font-bold mono grad-text">${total}</div>
-          </div>
-          <div class="panel2 p-3 text-center">
-            <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Per Day Avg</div>
-            <div class="text-[20px] font-bold mono ${total>0?'text-[var(--ink)]':'text-[var(--ink3)]'}">${perDay}</div>
-          </div>
-          <div class="panel2 p-3 text-center">
-            <div class="text-[10px] uppercase tracking-wider text-[var(--ink3)] font-semibold mb-1">Format lines</div>
-            <div class="text-[20px] font-bold mono ${formatRows>0?'text-[var(--accent2)]':'text-[var(--ink3)]'}">${formatRows}</div>
-          </div>
+        <div data-g-chan-stats>
+          ${renderGenerateCalendarStatsGrid(plan,days)}
         </div>
 
         <div>${reqLabel('Content direction for this calendar')}<textarea class="textarea" id="g-content-direction" data-calendar-required placeholder="What should this calendar achieve? e.g. Q2 product launch, Diwali sale, hiring push, thought leadership in AI — be specific." required style="min-height:88px">${esc(state._calendarContentDirection||'')}</textarea></div>
 
         ${renderBrandContextPreview(brand)}
 
-        ${total===0?`<div class="panel2 p-3 text-[11.5px]" style="border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.06);color:#fbbf24">⚠ Select at least one channel and set post quantity before generating.</div>`:`<div class="panel2 p-3 text-[11.5px] text-[var(--ink2)]">
-          Will generate <b class="text-[var(--ink)]">${total} posts</b> across <b class="text-[var(--ink)]">${activePlatformCountFromPlan(plan)} platforms</b> and <b class="text-[var(--ink)]">${formatRows} format lines</b>, spread over <b class="text-[var(--ink)]">${days} days</b>. Each row’s quantity uses that format (e.g. Reels + Carousels on the same platform). Takes ~${Math.ceil(total/12)*30}–${Math.ceil(total/12)*60}s.
-        </div>`}
+        <div data-g-chan-summary>
+          ${renderGenerateCalendarSummaryBox(plan,days)}
+        </div>
       </div>
 
       <div class="flex justify-end gap-2 mt-5">
         <button class="btn" data-close-modal>Cancel</button>
-        <button class="btn primary" data-action="run-calendar" ${total===0?'disabled':''}>${ICONS.spark} Run Generation</button>
+        <button class="btn primary" data-action="run-calendar" ${stats.total===0?'disabled':''}>${ICONS.spark} Run Generation</button>
       </div>
     </div>
   </div>`;
@@ -3136,7 +3188,7 @@ function onAppClick(e){
     if(next>0) plan[platform][format]=next;
     else delete plan[platform][format];
     pruneChanPlatformZeros(plan,platform);
-    render({modalOnly:true});
+    patchGenerateCalendarChannelUI();
     return;
   }
 
@@ -3150,7 +3202,7 @@ function onAppClick(e){
       if(!plan[platform]) plan[platform]={};
       plan[platform][next.value]=3;
     }
-    render({modalOnly:true});
+    patchGenerateCalendarChannelUI();
     return;
   }
 
@@ -3161,7 +3213,7 @@ function onAppClick(e){
     const plan=ensureChanPlanState();
     if(plan[platform]) delete plan[platform][format];
     pruneChanPlatformZeros(plan,platform);
-    render({modalOnly:true});
+    patchGenerateCalendarChannelUI();
     return;
   }
 
@@ -3172,7 +3224,7 @@ function onAppClick(e){
     const plan=ensureChanPlanState();
     if(platformTotalFromPlan(plan,key)>0) delete plan[key];
     else plan[key]={[getDefaultChannelFormat(key)]:Math.max(3,Math.round((Number(state._chanDays||30))/10))};
-    render({modalOnly:true});
+    patchGenerateCalendarChannelUI();
     return;
   }
 
@@ -3182,7 +3234,7 @@ function onAppClick(e){
     const a=chanAction.dataset.chanAction;
     if(a==='clear') state._chanPlan={};
     if(a==='reset'){ state._chanPlan=null; state._chanSel=null; state._chanFormats=null; }
-    render({modalOnly:true});
+    patchGenerateCalendarChannelUI();
     return;
   }
 
@@ -3227,7 +3279,7 @@ function onAppChange(e){
       }
       pruneChanPlatformZeros(plan,platform);
     }
-    render({modalOnly:true});
+    patchGenerateCalendarChannelUI();
     return;
   }
   if(el.dataset.chanFmtInput){
@@ -3238,12 +3290,12 @@ function onAppChange(e){
     if(n>0) plan[platform][format]=n;
     else delete plan[platform][format];
     pruneChanPlatformZeros(plan,platform);
-    render({modalOnly:true});
+    patchGenerateCalendarChannelUI();
     return;
   }
   if(el.dataset.chanDays){
     state._chanDays=Number(el.value);
-    render({modalOnly:true});
+    patchGenerateCalendarChannelUI();
     return;
   }
   if(el.dataset.postFilter){
